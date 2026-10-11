@@ -64,7 +64,21 @@
         document.addEventListener('keydown', function (e) {
             if (!current) return;
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
-            else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); done(true); }
+            else if (e.key === 'Enter') {
+                // Act on the focused button, so a user who tabbed to Cancel
+                // and pressed Enter cancels instead of confirming.
+                e.preventDefault(); e.stopPropagation();
+                done(document.activeElement !== cancelBtn);
+            } else if (e.key === 'Tab') {
+                // Trap focus between the two buttons.
+                e.preventDefault();
+                var toCancel = document.activeElement === okBtn && !e.shiftKey ? true
+                    : document.activeElement === cancelBtn && e.shiftKey ? false : null;
+                var target = (cancelBtn.style.display === 'none') ? okBtn
+                    : (toCancel === true ? cancelBtn : toCancel === false ? okBtn
+                        : (document.activeElement === okBtn ? cancelBtn : okBtn));
+                try { target.focus(); } catch (x) {}
+            }
         }, true);
     }
 
@@ -79,6 +93,9 @@
 
     function show(opts) {
         build();
+        // If a dialog is already open, resolve its promise (as cancel) before
+        // replacing it, so the earlier caller never hangs.
+        if (current) { var c = current; current = null; try { c.resolve(c.isConfirm ? false : undefined); } catch (e) {} }
         return new Promise(function (resolve) {
             current = { resolve: resolve, isConfirm: !!opts.isConfirm };
             titleEl.textContent = opts.title || (opts.isConfirm ? 'Confirm' : 'Notice');

@@ -301,9 +301,12 @@
             if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect'), conn); }
         });
         // Escape closes the overlay from anywhere (not only the search box);
-        // capture phase so it runs before page-level handlers.
+        // capture phase so it runs before page-level handlers. If a facet menu
+        // is open inside the overlay, let filters.js close just that first.
         document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape' && searchEngaged) { e.preventDefault(); e.stopPropagation(); close(); }
+            if (e.key !== 'Escape' || !searchEngaged) return;
+            if (document.querySelector('#search-overlay .rg-facet.open')) return;
+            e.preventDefault(); e.stopPropagation(); close();
         }, true);
         // "/" focuses the search unless typing in a field or a modal is open.
         document.addEventListener('keydown', function (e) {
@@ -319,6 +322,9 @@
 
     function start() {
         injectUI();
+        // injectUI only creates the box when a .brand-row exists; without it
+        // there is nothing to wire, so stand down rather than throw.
+        if (!input()) return;
         var mkFilters = function () {
             searchFilters = window.rgFilters.create({
                 mount: document.getElementById('search-facets'),
