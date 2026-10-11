@@ -188,11 +188,12 @@
     </div>
 
     <div id="sessions">
-        <div class="section-head">
-            <span class="section-count" id="session-counts"></span>
-            <button type="button" class="btn-add section-action" id="new-session-btn" style="display:none" title="Start a one-off session to any host. Nothing is saved.">&#9889; New ad-hoc session</button>
+        <div class="list-tools">
+            <input type="text" id="session-search" class="list-search" placeholder="Search sessions (user, host, owner, ID&#8230;)">
+            <div id="session-filters"></div>
+            <button type="button" class="btn-add list-action" id="new-session-btn" style="display:none" title="Start a one-off session to any host. Nothing is saved.">&#9889; New ad-hoc session</button>
         </div>
-        <div id="session-filters" class="list-tools"></div>
+        <span class="section-count" id="session-counts" style="display:none"></span>
         <table>
             <thead><tr>
                 <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
@@ -632,15 +633,33 @@
             facets: [
                 { key: 'type', label: 'Type', value: function(s) { return s.session_type; },
                   render: function(v) { return '<span class="type-badge type-' + v.replace(/[^a-z0-9-]/gi, '') + '">' + v.replace(/[<>&]/g, '') + '</span>'; } },
-                { key: 'status', label: 'Status', value: function(s) { return s.status; } },
-                { key: 'owner', label: 'Owner', value: function(s) { return s.created_by; } }
+                { key: 'user', label: 'User', value: function(s) { return s.username; } },
+                { key: 'owner', label: 'Owner', value: function(s) { return s.created_by; } },
+                { key: 'status', label: 'Status', value: function(s) { return s.status; } }
             ],
             onChange: function() { if (lastSessionList) renderSessionList(lastSessionList); }
+        });
+        function sessionSearchQuery() {
+            return (document.getElementById('session-search').value || '').toLowerCase();
+        }
+        document.getElementById('session-search').addEventListener('input', function() {
+            if (lastSessionList) renderSessionList(lastSessionList);
         });
 
         function renderSessionList(allSessions) {
                 sessionFilters.update(allSessions);
                 var sessions = sessionFilters.apply(allSessions);
+                var q = sessionSearchQuery();
+                if (q) {
+                    sessions = sessions.filter(function(s) {
+                        var host = (s.session_type === 'web' ? s.url : s.hostname) || '';
+                        return (s.username || '').toLowerCase().indexOf(q) >= 0
+                            || host.toLowerCase().indexOf(q) >= 0
+                            || (s.created_by || '').toLowerCase().indexOf(q) >= 0
+                            || (s.session_id || '').toLowerCase().indexOf(q) >= 0
+                            || (s.session_type || '').toLowerCase().indexOf(q) >= 0;
+                    });
+                }
                 var tbody = document.getElementById('session-list');
                 var empty = document.getElementById('session-empty');
                 var counts = document.getElementById('session-counts');

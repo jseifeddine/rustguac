@@ -5,19 +5,6 @@
     <title>rustguac - Reports</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
-        .filter-bar {
-            display: flex;
-            align-items: center;
-            gap: var(--s-3);
-            margin: var(--s-3) 0 var(--s-2) 0;
-            flex-wrap: wrap;
-        }
-        .filter-bar input {
-            width: 360px;
-            max-width: 100%;
-            height: var(--ctl-sm);
-            font-size: var(--fz-sm);
-        }
         th.sortable { cursor: pointer; user-select: none; }
         th.sortable:hover { color: var(--text); }
         th .sort-arrow { font-size: 0.7em; margin-left: var(--s-1); }
@@ -107,10 +94,10 @@
 
     <div style="margin-top:2em">
         <h2>Session History</h2>
-        <div class="filter-bar">
-            <input type="text" id="filter-input" placeholder="Filter sessions...">
+        <div class="list-tools">
+            <input type="text" id="filter-input" class="list-search" placeholder="Search session history (user, host, folder&#8230;)">
             <div id="history-filters"></div>
-            <button id="export-csv-btn" class="btn-add">Export CSV</button>
+            <button id="export-csv-btn" class="btn-add list-action">Export CSV</button>
         </div>
         <table id="history-table">
             <thead>
