@@ -5,14 +5,13 @@
  * own styles, a search box into the brand row, and the results overlay into the
  * body, loads the address-book search index, and wires the "/" shortcut.
  *
- * The connections page has its own in-page search (results interact with the
- * folder tree there), so this module stands aside when it sees that page's own
- * search box (#connections-search). It also depends on rgFilters (filters.js),
- * which it loads on demand if the page hasn't already.
+ * On the connections page, opening a folder from a result selects it in the
+ * sidebar in place (via window.rgSelectFolder) instead of navigating; the
+ * loaded index is also exposed as window.rgSearchIndex for that page's
+ * credentials banner. Depends on rgFilters (filters.js), loaded on demand.
  */
 (function () {
     'use strict';
-    if (document.getElementById('connections-search')) return; // connections handles its own
     if (window.__rgGlobalSearch) return;
     window.__rgGlobalSearch = true;
 
@@ -46,49 +45,6 @@
         return h;
     }
 
-    function injectStyle() {
-        var css = [
-            '.brand-row{position:relative;z-index:300}',
-            '.global-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,42vw);min-width:320px;display:flex;align-items:center}',
-            '.global-search input[type="search"]{width:100%;height:48px;padding:0 52px 0 46px;font-size:var(--fz-lg);background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);box-sizing:border-box;font-family:monospace;transition:border-color .15s,box-shadow .15s}',
-            '.global-search input[type="search"]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}',
-            '.global-search input[type="search"]:disabled{opacity:.6;cursor:progress}',
-            '.global-search-icon{position:absolute;left:16px;top:50%;transform:translateY(-50%) rotate(-45deg);color:var(--text-dim);font-size:22px;line-height:1;pointer-events:none}',
-            '.global-search:focus-within .global-search-icon{color:var(--accent)}',
-            '.global-search-key{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-family:monospace;font-size:var(--fz-xs);color:var(--text-dim);border:1px solid var(--border);border-radius:4px;padding:1px 7px;line-height:1.5;pointer-events:none}',
-            '.global-search:focus-within .global-search-key,.global-search.has-value .global-search-key{display:none}',
-            '@media(max-width:1180px){.global-search{position:static;transform:none;margin-left:auto;width:360px;min-width:0}}',
-            '#search-overlay{display:none;position:fixed;inset:0;z-index:200;background:color-mix(in srgb,var(--bg) 62%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);padding:86px var(--s-5) var(--s-5);justify-content:center;align-items:flex-start}',
-            '#search-overlay.open{display:flex}',
-            '#search-overlay-panel{width:min(1120px,100%);max-height:calc(100vh - 110px);display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.6);overflow:hidden;animation:rg-search-in 140ms ease-out both}',
-            '@keyframes rg-search-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}',
-            '#search-overlay-head{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-4) var(--s-4) var(--s-3);border-bottom:1px solid var(--border);flex:none}',
-            '#search-overlay-head .list-tools{margin:0}',
-            '.search-summary{color:var(--text-muted);font-size:var(--fz-sm);margin:0}',
-            '.search-summary strong{color:var(--text);font-weight:bold}',
-            '#search-results{overflow-y:auto;overflow-x:hidden;padding:0 var(--s-4) var(--s-3)}',
-            '#search-results .entries-table{border-collapse:collapse;width:100%;margin-top:0;border:0}',
-            '#search-results .entries-table th,#search-results .entries-table td{padding:var(--s-2) var(--s-3);text-align:left;border-bottom:1px solid var(--border);font-size:var(--fz-sm)}',
-            '#search-results .entries-table th{color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-size:var(--fz-xs);position:sticky;top:0;background:var(--surface);z-index:1}',
-            '#search-results .empty-state{padding:2.5em 1em;text-align:center}',
-            '#search-results mark{background:var(--accent);color:var(--bg);padding:0 .15em;border-radius:2px}',
-            '.search-results{table-layout:fixed}',
-            '.search-results .c-name{width:26%}.search-results .c-type{width:7%}.search-results .c-host{width:18%}.search-results .c-user{width:10%}.search-results .c-folder{width:15%}.search-results .c-actions{width:24%}',
-            '.search-results td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}',
-            '.search-results .entry-name,.search-results .entry-sub{display:block;overflow:hidden;text-overflow:ellipsis}',
-            '.search-results .entry-sub{color:var(--text-muted);font-size:var(--fz-xs)}',
-            '.search-results .folder-cell .fname{display:block;overflow:hidden;text-overflow:ellipsis}',
-            '.search-results .folder-cell .fkey{display:block;overflow:hidden;text-overflow:ellipsis;color:var(--text-dim);font-size:var(--fz-xs);letter-spacing:.04em}',
-            '.search-results .host-cell{color:var(--text-muted)}',
-            '.search-results .actions-cell{text-align:right;overflow:visible;text-overflow:clip;white-space:nowrap}',
-            '.search-results .actions-cell .btn-connect{vertical-align:middle}',
-            '.search-results .search-open-folder{margin-left:var(--s-3);white-space:nowrap;color:var(--accent);text-decoration:none;font-size:var(--fz-sm)}',
-            '.search-results .search-open-folder:hover{text-decoration:underline}',
-            '.search-more{color:var(--text-muted);font-size:var(--fz-sm);padding:var(--s-3) 0}'
-        ].join('');
-        var st = document.createElement('style'); st.id = 'rg-search-style'; st.textContent = css;
-        document.head.appendChild(st);
-    }
 
     function injectUI() {
         var brand = document.querySelector('.brand-row');
@@ -129,11 +85,13 @@
                 : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
                 : (e.hostname || '');
             var haystack = [e.name, e.display_name || '', host, e.username || '', e.proxmox_token_id || '', e.url || '', e.domain || '', e.session_type, r.folder_path].join(' ').toLowerCase();
-            return { scope: r.scope, folderPath: r.folder_path, entry: e, label: label, host: host, haystack: haystack };
+            return { scope: r.scope, folderPath: r.folder_path, folderName: r.folder_display_name || null, entry: e, label: label, host: host, haystack: haystack };
         });
     }
     function applyIndex(idx) {
         searchIndex = idx;
+        window.rgSearchIndex = idx;
+        try { document.dispatchEvent(new CustomEvent('rg-search-index-ready')); } catch (e) {}
         var inp = input(); if (!inp) return;
         inp.placeholder = 'Search ' + idx.length + ' connection' + (idx.length === 1 ? '' : 's') + '…';
         inp.disabled = false;
@@ -228,7 +186,6 @@
         renderResults(matches, q, tokens);
     }
 
-    var folderNames = {};   // "scope/path" -> display name, learned from entries
     function renderResults(matches, query, tokens) {
         var content = document.getElementById('search-results');
         searchFilters.update(matches.map(function (m) { return m.row; }));
@@ -262,7 +219,7 @@
             var connectLabel = needsPrompt ? 'Login…' : 'Connect';
             var userCol = e.session_type === 'proxmox' ? highlight(e.proxmox_token_id || '', tokens) : (e.username ? highlight(e.username, tokens) : '');
             var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
-            var fName = folderNames[r.scope + '/' + r.folderPath] || r.folderPath;
+            var fName = r.folderName || r.folderPath;
             html += '<tr>' +
                 '<td title="' + attr(r.label) + '">' + entryNameHtml(r.label, tokens) + '</td>' +
                 '<td><span class="type-badge ' + typeCls + '">' + esc(typeLabel) + '</span></td>' +
@@ -271,6 +228,7 @@
                 '<td class="folder-cell" title="' + attr(r.scope + '/' + r.folderPath) + '"><span class="fname"><span class="folder-scope">' + scopeIcon + '</span>' + highlight(fName, tokens) + '</span>' +
                 (fName !== r.folderPath ? '<span class="fkey">' + highlight(r.folderPath, tokens) + '</span>' : '') + '</td>' +
                 '<td class="actions-cell"><button class="btn-connect" data-sc-connect="' + attr(e.name) + '" data-scope="' + attr(r.scope) + '" data-folder="' + attr(r.folderPath) + '">' + connectLabel + '</button>' +
+                '<button class="btn-connect btn-connect-win" title="Open in a new window" data-sc-connect="' + attr(e.name) + '" data-scope="' + attr(r.scope) + '" data-folder="' + attr(r.folderPath) + '">⧉</button>' +
                 '<a href="#" class="search-open-folder" data-open-scope="' + attr(r.scope) + '" data-open-folder="' + attr(r.folderPath) + '" title="Open this folder">folder ↗</a></td>' +
                 '</tr>';
         });
@@ -308,6 +266,7 @@
             .then(reset, reset);
     }
     function openFolder(scope, path) {
+        if (typeof window.rgSelectFolder === 'function') { close(); window.rgSelectFolder(scope, path); return; }
         location.href = '/connections.html#open=' + encodeURIComponent(scope + '/' + path);
     }
 
@@ -341,6 +300,11 @@
             var conn = t.closest && t.closest('[data-sc-connect]');
             if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect'), conn); }
         });
+        // Escape closes the overlay from anywhere (not only the search box);
+        // capture phase so it runs before page-level handlers.
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && searchEngaged) { e.preventDefault(); e.stopPropagation(); close(); }
+        }, true);
         // "/" focuses the search unless typing in a field or a modal is open.
         document.addEventListener('keydown', function (e) {
             if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -354,7 +318,6 @@
     }
 
     function start() {
-        injectStyle();
         injectUI();
         var mkFilters = function () {
             searchFilters = window.rgFilters.create({

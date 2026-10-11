@@ -167,42 +167,6 @@
             display: flex; align-items: center; gap: var(--s-2);
             flex-wrap: wrap; flex-shrink: 0; margin-left: auto;
         }
-        /* Global search in the brand row: centred on the page, bigger than a
-           form field, with a "/" hint that goes away once it is in use. */
-        .brand-row { position: relative; }
-        .global-search {
-            position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-            width: min(640px, 42vw); min-width: 320px;
-            display: flex; align-items: center;
-        }
-        .global-search input[type="search"] {
-            width: 100%; height: 48px;
-            padding: 0 52px 0 46px;
-            font-size: var(--fz-lg);
-            background: var(--input); border: 1px solid var(--border); border-radius: 6px;
-            color: var(--text); box-sizing: border-box;
-            transition: border-color 0.15s, box-shadow 0.15s;
-        }
-        .global-search input[type="search"]:focus {
-            outline: none; border-color: var(--accent);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-        }
-        .global-search input[type="search"]:disabled { opacity: 0.6; cursor: progress; }
-        .global-search-icon {
-            position: absolute; left: 16px; top: 50%; transform: translateY(-50%) rotate(-45deg);
-            color: var(--text-dim); font-size: 22px; line-height: 1; pointer-events: none;
-        }
-        .global-search:focus-within .global-search-icon { color: var(--accent); }
-        .global-search-key {
-            position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-            font-family: monospace; font-size: var(--fz-xs); color: var(--text-dim);
-            border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; line-height: 1.5;
-            pointer-events: none;
-        }
-        .global-search:focus-within .global-search-key, .global-search.has-value .global-search-key { display: none; }
-        @media (max-width: 1180px) {
-            .global-search { position: static; transform: none; margin-left: auto; width: 360px; min-width: 0; }
-        }
         .entries-heading {
             flex: 1 1 auto; min-width: 0;
             display: flex; flex-direction: column; gap: 2px;
@@ -211,65 +175,6 @@
             display: flex; align-items: baseline; gap: var(--s-3);
             flex-wrap: wrap; min-width: 0;
         }
-        /* While the search is engaged the folder's own header is irrelevant:
-           the pane shows the results summary and the facet filters only. */
-        /* Search results float in a dim overlay over the folder view, which
-           is never disturbed. The brand row (with the search box) sits above
-           the overlay so typing continues; everything below is dimmed. */
-        .search-summary { color: var(--text-muted); font-size: var(--fz-sm); margin: 0; }
-        .search-summary strong { color: var(--text); font-weight: bold; }
-        .brand-row { z-index: 300; }
-        #search-overlay {
-            display: none;
-            position: fixed; inset: 0;
-            z-index: 200;
-            background: color-mix(in srgb, var(--bg) 62%, transparent);
-            backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
-            padding: 86px var(--s-5) var(--s-5);
-            justify-content: center; align-items: flex-start;
-        }
-        #search-overlay.open { display: flex; }
-        #search-overlay-panel {
-            width: min(1120px, 100%);
-            max-height: calc(100vh - 110px);
-            display: flex; flex-direction: column;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
-            overflow: hidden;
-            animation: rg-search-in 140ms ease-out both;
-        }
-        @keyframes rg-search-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-        #search-overlay-head {
-            display: flex; flex-direction: column; gap: var(--s-2);
-            padding: var(--s-4) var(--s-4) var(--s-3);
-            border-bottom: 1px solid var(--border);
-            flex: none;
-        }
-        #search-overlay-head .list-tools { margin: 0; }
-        #search-results { overflow-y: auto; overflow-x: hidden; padding: 0 var(--s-4) var(--s-3); }
-        #search-results .entries-table { margin-top: 0; border: 0; }
-        #search-results .entries-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
-        #search-results .empty-state { padding: 2.5em 1em; text-align: center; }
-        /* Results table: fixed columns, one line per cell, actions on the right. */
-        .search-results { table-layout: fixed; }
-        .search-results .c-name { width: 26%; }
-        .search-results .c-type { width: 7%; }
-        .search-results .c-host { width: 18%; }
-        .search-results .c-user { width: 10%; }
-        .search-results .c-folder { width: 15%; }
-        .search-results .c-actions { width: 24%; }
-        .search-results td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-        .search-results .entry-name, .search-results .entry-sub { display: block; overflow: hidden; text-overflow: ellipsis; }
-        .search-results .folder-cell .fname { display: block; overflow: hidden; text-overflow: ellipsis; }
-        .search-results .folder-cell .fkey { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: var(--fz-xs); letter-spacing: 0.04em; }
-        .search-results .folder-cell .folder-scope { margin-right: var(--s-1); }
-        .search-results .host-cell { color: var(--text-muted); }
-        .search-results .actions-cell { text-align: right; overflow: visible; text-overflow: clip; }
-        .search-results .actions-cell .btn-connect { vertical-align: middle; }
-        .search-results .search-open-folder { margin-left: var(--s-3); white-space: nowrap; }
-        .search-more { color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-3) 0; }
         .entries-key { color: var(--text-dim); font-size: var(--fz-xs); letter-spacing: 0.04em; }
         .entries-key:empty { display: none; }
         .folder-desc.folder-key { letter-spacing: 0.04em; }
@@ -727,11 +632,6 @@
     <div class="brand-row">
         <img id="site-logo" src="/logo.svg" alt="">
         <h1>rustguac</h1>
-        <div class="global-search" id="global-search">
-            <span class="global-search-icon" aria-hidden="true">&#9906;</span>
-            <input type="search" id="connections-search" placeholder="Search connections..." autocomplete="off" spellcheck="false" aria-label="Search connections" disabled />
-            <kbd class="global-search-key" title="Press / to search">/</kbd>
-        </div>
     </div>
     <nav>
         <a href="/connections.html" class="active">Connections</a>
@@ -834,16 +734,6 @@
     </div>
 
     <!-- Search results overlay: floats over an untouched folder view -->
-    <div id="search-overlay" aria-hidden="true">
-        <div id="search-overlay-panel" role="dialog" aria-label="Search results">
-            <div id="search-overlay-head">
-                <div id="search-summary" class="search-summary"></div>
-                <div id="search-facets" class="list-tools"></div>
-            </div>
-            <div id="search-results"></div>
-        </div>
-    </div>
-
     <!-- Folder create/edit modal -->
     <div class="modal-overlay" id="folder-modal">
         <div class="modal">
@@ -1546,11 +1436,6 @@
         var expandedPaths = {};    // "scope|path" -> true (tree expansion state; persisted)
         var EXPANDED_STORAGE_KEY = 'rustguac_connections_expanded';
         var SELECTED_STORAGE_KEY = 'rustguac_connections_selected';
-        // Quick-find search state
-        var searchIndex = null;        // [{scope, folderPath, entry, label, host, haystack}]
-        var searchIndexLoading = false;
-        var searchQuery = '';          // current query (lowercased & trimmed)
-        var searchActive = false;      // entries-content showing results, not folder entries
         function folderKey(scope, path) { return scope + '|' + path; }
         function folderPath(f) { return f.path || f.name; }
 
@@ -2220,11 +2105,9 @@
                         maybeAutoOpenSingleton();
                         if (done) done();
                     });
-                    loadSearchIndex(!!done);
                     return;
                 }
                 maybeAutoOpenSingleton();
-                loadSearchIndex(!!done);
                 if (done) done();
             })
             .catch(function(err) {
@@ -2476,9 +2359,7 @@
             if (document.querySelector('.modal-overlay.active')) return;
             liveLastRefresh = Date.now();
             loadFolders(function() {
-                // Search results re-run when the index reloads; a folder view
-                // re-renders from the fresh entry cache.
-                if (!searchActive && selectedFolder) loadEntries(selectedFolder.scope, folderPath(selectedFolder));
+                if (selectedFolder) loadEntries(selectedFolder.scope, folderPath(selectedFolder));
             });
             loadCredStatus();
         }
@@ -2505,194 +2386,7 @@
         // already triggers a refresh. Search runs entirely client-side against
         // the in-memory haystack.
 
-        function loadSearchIndex(quiet) {
-            var input = document.getElementById('connections-search');
-            if (!input) return;
-            searchIndexLoading = true;
-            if (!quiet) {
-                input.placeholder = 'Indexing...';
-                input.disabled = true;
-            }
-            fetch('/api/addressbook/search-index', { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(res) {
-                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
-                return res.json();
-            })
-            .then(function(data) {
-                var rows = (data && data.entries) || [];
-                searchIndex = rows.map(function(r) {
-                    var e = r.entry;
-                    var label = e.display_name || e.name;
-                    var host = e.session_type === 'web' ? (e.url || '')
-                             : e.session_type === 'vdi' ? (e.container_image || '')
-                             : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
-                             : (e.hostname || '');
-                    var haystack = [
-                        e.name,
-                        e.display_name || '',
-                        host,
-                        e.username || '',
-                        e.proxmox_token_id || '',
-                        e.url || '',
-                        e.domain || '',
-                        e.session_type,
-                        r.folder_path
-                    ].join(' ').toLowerCase();
-                    return {
-                        scope: r.scope,
-                        folderPath: r.folder_path,
-                        entry: e,
-                        label: label,
-                        host: host,
-                        haystack: haystack
-                    };
-                });
-                searchIndexLoading = false;
-                input.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '...';
-                input.disabled = false;
-                if (searchQuery || searchEngaged) runSearch();
-                // The full entry set is now known — refresh the proactive
-                // "credentials to set up" banner against it.
-                updateCredBanner();
-            })
-            .catch(function(err) {
-                searchIndexLoading = false;
-                input.placeholder = 'Search unavailable';
-                input.disabled = false;
-                if (window.console) console.warn('Search index failed:', err.message);
-            });
-        }
 
-        // Engaged: the box has focus or text. The folder header gives way to a
-        // results summary and the facet filters, and with no text yet the
-        // pane lists every connection the user can see.
-        var searchEngaged = false;
-        var searchKeepTimer = null;
-        function setSearchEngaged(on) {
-            if (searchEngaged === on) return;
-            searchEngaged = on;
-            searchActive = on;   // the connect handler reads searchIndex while open
-            var ov = document.getElementById('search-overlay');
-            ov.classList.toggle('open', on);
-            ov.setAttribute('aria-hidden', on ? 'false' : 'true');
-            if (on) runSearch();
-        }
-        function runSearch() {
-            var input = document.getElementById('connections-search');
-            if (!input) return;
-            var q = (input.value || '').trim().toLowerCase();
-            searchQuery = q;
-            document.getElementById('global-search').classList.toggle('has-value', !!input.value);
-            // The overlay only exists while engaged; nothing to do otherwise.
-            if (!searchEngaged) return;
-            if (!searchIndex) {
-                document.getElementById('search-results').innerHTML =
-                    '<p class="empty" style="padding:1.5em">Indexing connections, please wait...</p>';
-                return;
-            }
-            if (!q) {
-                // Empty box: list every connection the user can see.
-                var all = searchIndex.map(function(row) { return { row: row, score: 0 }; });
-                all.sort(function(a, b) {
-                    if (a.row.folderPath !== b.row.folderPath) return a.row.folderPath.localeCompare(b.row.folderPath);
-                    return a.row.label.localeCompare(b.row.label);
-                });
-                renderSearchResults(all, '', []);
-                return;
-            }
-            var tokens = q.split(/\s+/).filter(Boolean);
-            var matches = [];
-            for (var i = 0; i < searchIndex.length; i++) {
-                var row = searchIndex[i];
-                var ok = true;
-                for (var t = 0; t < tokens.length; t++) {
-                    if (row.haystack.indexOf(tokens[t]) === -1) { ok = false; break; }
-                }
-                if (!ok) continue;
-                var first = tokens[0];
-                var lcLabel = row.label.toLowerCase();
-                var lcName = row.entry.name.toLowerCase();
-                var score = 0;
-                if (lcLabel.indexOf(first) === 0 || lcName.indexOf(first) === 0) score += 100;
-                else if (lcLabel.indexOf(first) !== -1 || lcName.indexOf(first) !== -1) score += 50;
-                if ((row.host || '').toLowerCase().indexOf(first) !== -1) score += 20;
-                if (row.folderPath.toLowerCase().indexOf(first) !== -1) score += 10;
-                matches.push({ row: row, score: score });
-            }
-            matches.sort(function(a, b) {
-                if (b.score !== a.score) return b.score - a.score;
-                if (a.row.folderPath !== b.row.folderPath) return a.row.folderPath.localeCompare(b.row.folderPath);
-                return a.row.label.localeCompare(b.row.label);
-            });
-            renderSearchResults(matches, q, tokens);
-        }
-
-        function renderSearchResults(matches, query, tokens) {
-            // Results are not selectable; the folder view keeps the selection.
-            var content = document.getElementById('search-results');
-            searchFilters.update(matches.map(function(m) { return m.row; }));
-            var allMatches = matches;
-            matches = matches.filter(function(m) { return searchFilters.apply([m.row]).length > 0; });
-            var summary = document.getElementById('search-summary');
-            var total = searchIndex ? searchIndex.length : allMatches.length;
-            if (!query) {
-                summary.innerHTML = searchFilters.active()
-                    ? '<strong>' + matches.length + '</strong> of ' + total + ' connections'
-                    : 'All <strong>' + total + '</strong> connections';
-            } else {
-                summary.innerHTML = '<strong>' + matches.length + '</strong>' +
-                    (searchFilters.active() && allMatches.length !== matches.length ? ' of ' + allMatches.length : '') +
-                    ' match' + (matches.length === 1 ? '' : 'es') + ' for <strong>' + escapeHtml(query) + '</strong>';
-            }
-            if (matches.length === 0) {
-                content.innerHTML = '<div class="empty-state">' +
-                    '<p style="color:var(--text-dim);margin:0">' +
-                    (query ? (allMatches.length ? 'No matches for ' + escapeHtml(query) + ' with the current filters' : 'No matches for ' + escapeHtml(query))
-                           : 'No connections match the current filters') +
-                    '</p></div>';
-                return;
-            }
-            var maxResults = 50;
-            var more = matches.length - maxResults;
-            var shown = matches.slice(0, maxResults);
-            var html = '<table class="entries-table search-results">' +
-                '<colgroup><col class="c-name"><col class="c-type"><col class="c-host"><col class="c-user"><col class="c-folder"><col class="c-actions"></colgroup>' +
-                '<thead><tr><th>Name</th><th>Type</th><th>Host</th><th>User</th><th>Folder</th><th></th></tr></thead><tbody>';
-            shown.forEach(function(m) {
-                var r = m.row;
-                var e = r.entry;
-                var typeLabel = e.session_type.toUpperCase();
-                if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
-                var typeCls = 'type-' + e.session_type;
-                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
-                var connectLabel = needsPrompt ? 'Login...' : 'Connect';
-                var userCol = e.session_type === 'proxmox'
-                    ? highlight(e.proxmox_token_id || '', tokens)
-                    : (e.username ? highlight(e.username, tokens) : '');
-                if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
-                if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
-                var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
-                var fInfo = findFolder(r.scope, r.folderPath);
-                var fName = fInfo && fInfo.display_name ? fInfo.display_name : r.folderPath;
-                html += '<tr>';
-                html += '<td title="' + escapeAttr(r.label) + '">' + entryNameHtml(r.label, tokens) + '</td>';
-                html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
-                html += '<td class="host-cell" title="' + escapeAttr(r.host || '') + '">' + highlight(r.host || '', tokens) + '</td>';
-                html += '<td>' + userCol + '</td>';
-                html += '<td class="folder-cell" title="' + escapeAttr(r.scope + '/' + r.folderPath) + '"><span class="fname"><span class="folder-scope">' + scopeIcon + '</span>' + highlight(fName, tokens) + '</span>'
-                    + (fName !== r.folderPath ? '<span class="fkey">' + highlight(r.folderPath, tokens) + '</span>' : '') + '</td>';
-                html += '<td class="actions-cell connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + connectLabel + '</button>'
-                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">&#x29c9;</button>'
-                    + '<a href="#" class="search-open-folder" data-open-scope="' + escapeAttr(r.scope) + '" data-open-folder="' + escapeAttr(r.folderPath) + '" title="Open this folder">folder &#8599;</a></td>';
-                html += '</tr>';
-            });
-            html += '</tbody></table>';
-            if (more > 0) {
-                html += '<div class="search-more">+' + more + ' more match' + (more === 1 ? '' : 'es') + ' — refine your search to narrow results</div>';
-            }
-            content.innerHTML = html;
-            content.scrollTop = 0;
-        }
 
         function highlight(text, tokens) {
             var safe = escapeHtml(text || '');
@@ -2715,16 +2409,13 @@
             if (slash < 0) return;
             var scope = decoded.slice(0, slash), path = decoded.slice(slash + 1);
             try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
-            openFolderFromSearch(scope, path);
+            window.rgSelectFolder(scope, path);
         }
 
-        function openFolderFromSearch(scope, targetPath) {
-            var input = document.getElementById('connections-search');
-            if (input) { input.value = ''; input.blur(); }
-            searchQuery = '';
-            setSearchEngaged(false);
-            document.getElementById('global-search').classList.remove('has-value');
-
+        // Select a folder in the sidebar: expand its ancestors, highlight it and
+        // load its entries. Exposed for the global search (search.js) and the
+        // #open=scope/path URL hash, so a folder can be opened from any page.
+        window.rgSelectFolder = function(scope, targetPath) {
             var parts = targetPath.split('/');
             var ancestors = [];
             for (var i = 1; i < parts.length; i++) {
@@ -2765,7 +2456,7 @@
                 }
             }
             loadNext();
-        }
+        };
 
         function loadEntries(scope, folderPath, forceRefresh) {
             var header = document.getElementById('entries-header');
@@ -2881,8 +2572,8 @@
             if (!banner) return;
             if (!setCredVars) { banner.style.display = 'none'; return; }
             var entries = [];
-            if (searchIndex) {
-                entries = searchIndex.map(function(r) { return r.entry; });
+            if (window.rgSearchIndex) {
+                entries = window.rgSearchIndex.map(function(r) { return r.entry; });
             } else {
                 Object.keys(folderEntries).forEach(function(k) {
                     (folderEntries[k] || []).forEach(function(e) { entries.push(e); });
@@ -2909,7 +2600,7 @@
         }
 
         function refreshEntriesView() {
-            if (lastEntriesRender && !searchActive) {
+            if (lastEntriesRender) {
                 renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
             }
         }
@@ -2929,16 +2620,6 @@
             onChange: function() {
                 if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
             }
-        });
-        // Search-overlay filter (Type + Folder), independent of the folder view.
-        var searchFilters = rgFilters.create({
-            mount: document.getElementById('search-facets'),
-            id: 'connections-search',
-            facets: [
-                typeFacet,
-                { key: 'folder', label: 'Folder', value: function(x) { return x.folderPath || null; } }
-            ],
-            onChange: function() { runSearch(); }
         });
 
         function renderEntries(allEntries, scope, folder) {
@@ -3502,22 +3183,9 @@
             if (e.key === 'Enter') document.getElementById('cred-connect').click();
         });
 
-        // Connect / open-folder / entry actions. Bound to both the folder
-        // entries pane and the search-results overlay, so result rows in the
-        // overlay behave the same as folder rows.
+        // Connect / clone / delete / edit actions for the folder entries table.
         function handleEntryActionsClick(e) {
             var btn = e.target;
-
-            // Open folder from a search result row
-            var openLink = btn.closest && btn.closest('.search-open-folder');
-            if (openLink) {
-                e.preventDefault();
-                openFolderFromSearch(
-                    openLink.getAttribute('data-open-scope'),
-                    openLink.getAttribute('data-open-folder')
-                );
-                return;
-            }
 
             if (btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win')) {
                 var newWindow = !!btn.getAttribute('data-connect-win');
@@ -3526,21 +3194,10 @@
                 var folder = btn.getAttribute('data-folder');
                 clearError();
 
-                // Find the entry data. When the table is showing search results,
-                // currentEntries is the previously-selected folder's entries —
-                // look in searchIndex instead.
+                // Find the entry in the current folder's entries.
                 var entry = null;
-                if (searchActive && searchIndex) {
-                    for (var si = 0; si < searchIndex.length; si++) {
-                        var r = searchIndex[si];
-                        if (r.scope === scope && r.folderPath === folder && r.entry.name === name) {
-                            entry = r.entry; break;
-                        }
-                    }
-                } else {
-                    for (var i = 0; i < currentEntries.length; i++) {
-                        if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
-                    }
+                for (var i = 0; i < currentEntries.length; i++) {
+                    if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
                 }
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
@@ -3605,7 +3262,6 @@
             }
         }
         document.getElementById('entries-content').addEventListener('click', handleEntryActionsClick);
-        document.getElementById('search-results').addEventListener('click', handleEntryActionsClick);
 
         // ── Folder modal ──
 
@@ -5086,65 +4742,6 @@
             }
         });
 
-        // Quick-find: '/' focuses search, Esc clears + blurs.
-        // Skip when typing in any input/textarea or when a modal is open.
-        var _searchInput = document.getElementById('connections-search');
-        if (_searchInput) {
-            _searchInput.addEventListener('input', runSearch);
-            _searchInput.addEventListener('focus', function() { setSearchEngaged(true); });
-            _searchInput.addEventListener('blur', function() {
-                // A click on the overlay (a filter, Connect, open folder) blurs
-                // the box first; keep it open for that. An empty box with the
-                // focus gone elsewhere means the user is done searching.
-                if (_searchInput.value) return;
-                clearTimeout(searchKeepTimer);
-                searchKeepTimer = setTimeout(function() {
-                    if (document.activeElement === _searchInput || _searchInput.value) return;
-                    var a = document.activeElement;
-                    var ov = document.getElementById('search-overlay');
-                    if (a && ov && ov.contains(a) && a !== document.body) return;
-                    if (searchKeepUntil > Date.now()) return;
-                    setSearchEngaged(false);
-                }, 150);
-            });
-            _searchInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    _searchInput.value = '';
-                    _searchInput.blur();
-                    setSearchEngaged(false);
-                    e.stopPropagation();
-                }
-            });
-        }
-        var searchKeepUntil = 0;
-        document.addEventListener('mousedown', function(e) {
-            var ov = document.getElementById('search-overlay-panel');
-            if (ov && ov.contains(e.target)) searchKeepUntil = Date.now() + 400;
-        }, true);
-        // Click on the dim backdrop (outside the panel) closes the search.
-        document.getElementById('search-overlay').addEventListener('mousedown', function(e) {
-            if (e.target === this) {
-                var input = document.getElementById('connections-search');
-                if (input) { input.value = ''; input.blur(); }
-                document.getElementById('global-search').classList.remove('has-value');
-                setSearchEngaged(false);
-            }
-        });
-        document.addEventListener('keydown', function(e) {
-            if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
-            var t = document.activeElement;
-            if (t) {
-                var tag = t.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
-            }
-            if (document.querySelector('.modal-overlay.active')) return;
-            var input = document.getElementById('connections-search');
-            if (input && !input.disabled) {
-                e.preventDefault();
-                e.stopPropagation();
-                setTimeout(function() { input.focus(); input.select(); }, 0);
-            }
-        });
 
         // ── My Credentials ──
         // Callback to run after a successful credential save (used by the
@@ -6096,5 +5693,14 @@
         }
     </script>
     <script src="/ui.js"></script>
+    <script src="/search.js"></script>
+    <script>
+        // The global search (search.js) loads the full address-book index; the
+        // credentials banner reads it (window.rgSearchIndex) for a complete
+        // view, so refresh it whenever the index is ready or changes.
+        document.addEventListener('rg-search-index-ready', function() {
+            try { if (typeof updateCredBanner === 'function') updateCredBanner(); } catch (e) {}
+        });
+    </script>
 </body>
 </html>
