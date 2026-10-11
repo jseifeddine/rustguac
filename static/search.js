@@ -369,8 +369,11 @@
             started = true;
             clearTimeout(settleTimer);
             window.removeEventListener('resize', onResize);
+            // Window size only: the measured viewport IS the fullscreen size.
+            // No screen_width/height — the server prefers those for a
+            // fullscreen bitmap session, and the physical screen overshoots
+            // the viewport on a notched Mac (that was the RDP resize).
             var body = { dpi: Math.round((window.devicePixelRatio || 1) * 96), width: window.innerWidth, height: window.innerHeight };
-            if (window.screen && screen.width > 0) { body.screen_width = screen.width; body.screen_height = screen.height; }
             fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
                 { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
                 .then(function (res) {

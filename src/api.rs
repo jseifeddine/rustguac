@@ -3272,22 +3272,21 @@ pub fn initial_session_size(
     screen: (Option<u32>, Option<u32>),
 ) -> (Option<u32>, Option<u32>) {
     let bitmap = matches!(session_type, "rdp" | "vnc");
-    match (bitmap && fullscreen_on_connect, screen) {
-        (true, (Some(w), Some(h))) if w > 0 && h > 0 => {
-            // RDP's display channel rounds every size down to a multiple of 16
-            // (patches/007, which prevents the H.264 green band). Create the
-            // session at that same rounded size so it already matches the
-            // client's first post-connect size send: guacd coalesces them and
-            // there is no resize, so the H.264 hardware decoder is not rebuilt
-            // and the video never stalls on connect (#257). VNC has no such
-            // rounding, so it keeps the exact screen size.
-            if session_type == "rdp" {
-                (Some(round_down_mod16(w)), Some(round_down_mod16(h)))
-            } else {
-                (Some(w), Some(h))
-            }
-        }
+    let (w, h) = match (bitmap && fullscreen_on_connect, screen) {
+        (true, (Some(w), Some(h))) if w > 0 && h > 0 => (Some(w), Some(h)),
         _ => window,
+    };
+    // RDP's display channel rounds every requested size down to a multiple
+    // of 16 (patches/007, which prevents the H.264 green band), so the
+    // client's first post-connect size send always lands on that grid.
+    // Create the session there already, fullscreen or windowed, so the two
+    // match: guacd coalesces them and there is no resize, the H.264 decoder
+    // is not rebuilt and the picture never flashes on connect (#257). VNC
+    // has no such rounding, so it keeps the exact size.
+    if session_type == "rdp" {
+        (w.map(round_down_mod16), h.map(round_down_mod16))
+    } else {
+        (w, h)
     }
 }
 
@@ -6357,13 +6356,18 @@ mod tests {
         assert_eq!(initial_session_size("ssh", true, win, scr), win);
         assert_eq!(initial_session_size("telnet", true, win, scr), win);
         assert_eq!(initial_session_size("web", true, win, scr), win);
-        // not fullscreen, or no screen size offered: window size
-        assert_eq!(initial_session_size("rdp", false, win, scr), win);
-        assert_eq!(initial_session_size("rdp", true, win, (None, None)), win);
+        // not fullscreen, or no screen size offered: window size — still on
+        // the mod-16 grid for RDP, since the client's first size send is
+        // rounded to it by guacd either way (no resize on connect).
+        let win16 = (Some(1696), Some(944));
+        assert_eq!(initial_session_size("rdp", false, win, scr), win16);
+        assert_eq!(initial_session_size("rdp", true, win, (None, None)), win16);
         assert_eq!(
             initial_session_size("rdp", true, win, (Some(0), Some(0))),
-            win
+            win16
         );
+        assert_eq!(initial_session_size("vnc", false, win, scr), win);
+        assert_eq!(initial_session_size("rdp", false, (None, None), scr), (None, None));
     }
 
     #[test]
