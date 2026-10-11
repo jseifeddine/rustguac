@@ -1930,7 +1930,7 @@
                     }
                     return;
                 }
-                loadFolders();
+                loadFolders(function() { rgHashOpen(); });
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
@@ -2701,6 +2701,19 @@
             if (!escaped.length) return safe;
             var re = new RegExp('(' + escaped.join('|') + ')', 'gi');
             return safe.replace(re, '<mark>$1</mark>');
+        }
+
+        // Open a folder requested via the URL hash (#open=scope/path), used
+        // when the global search on another page links here.
+        function rgHashOpen() {
+            var m = /^#open=(.+)$/.exec(location.hash || '');
+            if (!m) return;
+            var decoded = decodeURIComponent(m[1]);
+            var slash = decoded.indexOf('/');
+            if (slash < 0) return;
+            var scope = decoded.slice(0, slash), path = decoded.slice(slash + 1);
+            try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+            openFolderFromSearch(scope, path);
         }
 
         function openFolderFromSearch(scope, targetPath) {
