@@ -1069,8 +1069,36 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
 .search-summary { color: var(--text-muted); font-size: var(--fz-sm); margin: 0; }
 .search-summary strong { color: var(--text); font-weight: bold; }
 #search-results { overflow-y: auto; overflow-x: hidden; padding: 0 var(--s-4) var(--s-3); }
-#search-results .entries-table { margin-top: 0; border: 0; }
-#search-results .entries-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+/* The results table styles itself fully here (not via any page's inline
+   .entries-table), so it looks identical on every page. */
+#search-results .entries-table { border-collapse: collapse; width: 100%; margin-top: 0; border: 0; }
+#search-results .entries-table th,
+#search-results .entries-table td {
+    padding: var(--s-2) var(--s-3);
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--fz-sm);
+    vertical-align: middle;
+}
+#search-results .entries-table th {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: var(--fz-xs);
+    font-weight: normal;
+    position: sticky; top: 0;
+    background: var(--surface);
+    z-index: 1;
+}
+#search-results .entries-table tbody tr:hover { background: var(--input); }
+#search-results .entries-table tbody tr:last-child td { border-bottom: none; }
+/* Override any page's own table rules so the results look the same everywhere. */
+#search-results .entries-table tbody tr:nth-child(even) { background: transparent; }
+#search-results .folder-cell .folder-scope {
+    display: inline; width: auto; height: auto;
+    font-size: inherit; color: var(--text-dim); cursor: default;
+    margin-right: var(--s-1);
+}
 #search-results .empty-state { padding: 2.5em 1em; text-align: center; }
 /* Results table: fixed columns, one line per cell, actions on the right. */
 .search-results { table-layout: fixed; }
