@@ -6367,7 +6367,10 @@ mod tests {
             win16
         );
         assert_eq!(initial_session_size("vnc", false, win, scr), win);
-        assert_eq!(initial_session_size("rdp", false, (None, None), scr), (None, None));
+        assert_eq!(
+            initial_session_size("rdp", false, (None, None), scr),
+            (None, None)
+        );
     }
 
     #[test]
