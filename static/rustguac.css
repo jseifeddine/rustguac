@@ -360,8 +360,9 @@ tbody tr:last-child td { border-bottom: none; }
 /* ── Section heading strip (used above grids/lists) ──────── */
 .section-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--s-2);
+    min-height: var(--ctl-sm);
     margin-bottom: var(--s-3);
     padding-bottom: var(--s-2);
     border-bottom: 1px solid var(--border);

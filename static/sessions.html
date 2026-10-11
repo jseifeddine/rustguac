@@ -178,8 +178,8 @@
             <input type="text" id="banner" placeholder="e.g. Please enter your credentials when prompted">
         </label>
         <div class="modal-actions">
-            <button type="button" class="btn-small" id="adhoc-cancel">Cancel</button>
             <button type="submit" id="connect-btn">Connect</button>
+            <button type="button" class="btn-cancel" id="adhoc-cancel">Cancel</button>
         </div>
         <div id="error"></div>
         </div>
@@ -778,5 +778,6 @@
         refreshSessions();
         setInterval(refreshSessions, 5000);
     </script>
+    <script src="/search.js"></script>
 </body>
 </html>
