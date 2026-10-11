@@ -154,14 +154,18 @@
 
         /* Folder action bar */
         .folder-actions {
-            display: flex; align-items: center; gap: var(--s-2);
-            margin-bottom: var(--s-4); padding-bottom: var(--s-3);
+            display: flex; align-items: flex-start; gap: var(--s-3);
+            padding-bottom: var(--s-2);
             border-bottom: 1px solid var(--border);
             flex-wrap: wrap;
         }
         .folder-actions strong {
             font-size: var(--fz-xl); color: var(--text);
-            font-weight: bold; letter-spacing: 0.02em; line-height: 1.3;
+            font-weight: bold; letter-spacing: 0.02em; line-height: 1.2;
+        }
+        .folder-actions-btns {
+            display: flex; align-items: center; gap: var(--s-2);
+            flex-wrap: wrap; flex-shrink: 0; margin-left: auto;
         }
         /* Global search in the brand row: centred on the page, bigger than a
            form field, with a "/" hint that goes away once it is in use. */
@@ -199,14 +203,21 @@
         @media (max-width: 1180px) {
             .global-search { position: static; transform: none; margin-left: auto; width: 360px; min-width: 0; }
         }
-        .folder-actions-spacer { flex: 1 1 auto; }
+        .entries-heading {
+            flex: 1 1 auto; min-width: 0;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        .entries-title-row {
+            display: flex; align-items: baseline; gap: var(--s-3);
+            flex-wrap: wrap; min-width: 0;
+        }
         /* While the search is engaged the folder's own header is irrelevant:
            the pane shows the results summary and the facet filters only. */
         body.search-engaged #entries-header .folder-actions { display: none; }
-        .search-summary { display: none; color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-2) 0 0; }
-        .search-summary strong { color: var(--text); font-weight: normal; }
+        .search-summary { display: none; color: var(--text-muted); font-size: var(--fz-sm); margin: 0 0 var(--s-2); }
+        .search-summary strong { color: var(--text); font-weight: bold; }
         body.search-engaged .search-summary { display: block; }
-        body.search-engaged #entries-filters { margin-top: var(--s-2); }
+        body.search-engaged #entries-filters { margin-top: 0; }
         /* Results table: fixed columns, one line per cell, actions on the right. */
         .search-results { table-layout: fixed; }
         .search-results .c-name { width: 29%; }
@@ -225,12 +236,11 @@
         .search-results .actions-cell .btn-connect { vertical-align: middle; }
         .search-results .search-open-folder { margin-left: var(--s-3); white-space: nowrap; }
         .search-more { color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-3) 0; }
-        .entries-heading { display: inline-flex; flex-direction: column; line-height: 1.15; }
-        .entries-key { color: var(--text-dim); font-size: var(--fz-sm); letter-spacing: 0.04em; }
+        .entries-key { color: var(--text-dim); font-size: var(--fz-xs); letter-spacing: 0.04em; }
         .entries-key:empty { display: none; }
         .folder-desc.folder-key { letter-spacing: 0.04em; }
         .folder-actions .desc {
-            color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
+            color: var(--text-muted); font-size: var(--fz-sm); font-style: italic; min-width: 0;
         }
 
         /* Folder modal: default credentials */
@@ -635,12 +645,13 @@
         #entries-header {
             position: sticky; top: 0; z-index: 30;
             background: var(--bg);
-            padding-bottom: var(--s-2);
-            margin-bottom: var(--s-2);
+            padding: var(--s-2) 0;
+            margin-bottom: var(--s-3);
             box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.6);
         }
-        #entries-header .folder-actions { margin-bottom: 0; }
+        #entries-header .folder-actions { margin: 0; }
         #entries-header #entries-filters { margin: var(--s-2) 0 0 0; }
+        #entries-header .list-tools { margin-bottom: 0; }
 
         /* Sidebar panel: one pinned header band (label, new-folder button,
            filter) on a surface tone, then the list with hairline dividers.
@@ -758,16 +769,19 @@
             <div class="main">
                 <div id="entries-header" style="display:none">
                     <div class="folder-actions">
-                        <span class="entries-heading">
-                            <strong id="entries-title"></strong>
+                        <div class="entries-heading">
+                            <div class="entries-title-row">
+                                <strong id="entries-title"></strong>
+                                <span id="entries-desc" class="desc"></span>
+                            </div>
                             <span id="entries-key" class="entries-key"></span>
-                        </span>
-                        <span id="entries-desc" class="desc"></span>
-                        <span class="folder-actions-spacer"></span>
-                        <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
-                        <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
-                        <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
-                        <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
+                        </div>
+                        <div class="folder-actions-btns">
+                            <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
+                            <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
+                            <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
+                            <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
+                        </div>
                     </div>
                     <div id="search-summary" class="search-summary"></div>
                     <div id="entries-filters" class="list-tools"></div>
@@ -3322,13 +3336,19 @@
             btn.disabled = true;
             if (!isWinBtn) btn.textContent = 'Connecting...';
             clearError();
-            // A window opened AFTER the async connect fetch is popup-blocked (no
-            // user gesture), so open it synchronously now (we are still inside the
-            // click gesture) and navigate it once the session exists.
+            // Open the target window synchronously now, while we are still
+            // inside the click gesture: a window opened after the async fetch
+            // is popup-blocked, and — the reason it matters for a
+            // fullscreen-on-connect entry — a window opened within the gesture
+            // carries the user activation, so the client can enter fullscreen
+            // on load with no second click. The ⧉ button gets a sized popup;
+            // a plain Connect gets a tab.
             var targetWin = null;
             if (newWindow) {
                 targetWin = window.open('', '_blank',
                     'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+            } else {
+                targetWin = window.open('', '_blank');
             }
             var body = extraBody || {};
             // Send browser dimensions so RDP sessions start at correct resolution

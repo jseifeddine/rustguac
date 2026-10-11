@@ -3247,24 +3247,26 @@ pub struct ProbeHostKeyRequest {
 
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
 #[allow(clippy::too_many_arguments)]
-/// The size a new session is created at: always the browser window.
+/// The size a new session is created at.
 ///
-/// A fullscreen-on-connect session was briefly created at the screen's size
-/// instead (#257), so no resize was needed once fullscreen landed. But while
-/// the window is still shorter than the screen, a bitmap desktop drawn at the
-/// taller screen size is scaled to fit, letterboxing with a gap down the
-/// side — visible before fullscreen and jarring. The window's size fills the
-/// viewport on the first paint; the one resize when fullscreen is entered is
-/// hidden behind the connect cover instead. `screen` is kept for the call
-/// site but no longer changes the result.
+/// A bitmap (RDP/VNC) entry that opens fullscreen on connect is created at
+/// the screen's size, which is the size it will have once fullscreen lands.
+/// The client holds the connect cover up until fullscreen is entered, so the
+/// desktop is painted once at that final size and revealed in fullscreen with
+/// no resize and no second repaint (#257). The windowed, scaled-to-fit frame
+/// that would otherwise show a letterbox gap is never seen. Everything else
+/// keeps the window's size: a terminal reflows to fullscreen instantly.
 pub fn initial_session_size(
     session_type: &str,
     fullscreen_on_connect: bool,
     window: (Option<u32>, Option<u32>),
     screen: (Option<u32>, Option<u32>),
 ) -> (Option<u32>, Option<u32>) {
-    let _ = (session_type, fullscreen_on_connect, screen);
-    window
+    let bitmap = matches!(session_type, "rdp" | "vnc");
+    match (bitmap && fullscreen_on_connect, screen) {
+        (true, (Some(w), Some(h))) if w > 0 && h > 0 => (Some(w), Some(h)),
+        _ => window,
+    }
 }
 
 pub async fn ab_connect_entry(
@@ -6286,16 +6288,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initial_session_size_is_always_the_window() {
+    fn fullscreen_sizing_applies_to_bitmap_sessions_only() {
         let win = (Some(1710), Some(954));
         let scr = (Some(1710), Some(1112));
-        // Every type, fullscreen or not, screen size offered or not: the
-        // window fills the viewport on the first paint; fullscreen resizes
-        // behind the cover.
-        for ty in ["rdp", "vnc", "ssh", "telnet", "web"] {
-            assert_eq!(initial_session_size(ty, true, win, scr), win);
-            assert_eq!(initial_session_size(ty, false, win, scr), win);
-        }
+        // RDP/VNC opening fullscreen: created at the screen's size, painted
+        // behind the cover and revealed in fullscreen with no resize.
+        assert_eq!(initial_session_size("rdp", true, win, scr), scr);
+        assert_eq!(initial_session_size("vnc", true, win, scr), scr);
+        // a terminal reflows instantly: window size, fullscreen or not
+        assert_eq!(initial_session_size("ssh", true, win, scr), win);
+        assert_eq!(initial_session_size("telnet", true, win, scr), win);
+        assert_eq!(initial_session_size("web", true, win, scr), win);
+        // not fullscreen, or no screen size offered: window size
+        assert_eq!(initial_session_size("rdp", false, win, scr), win);
         assert_eq!(initial_session_size("rdp", true, win, (None, None)), win);
         assert_eq!(
             initial_session_size("rdp", true, win, (Some(0), Some(0))),
