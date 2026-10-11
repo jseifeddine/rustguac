@@ -342,6 +342,36 @@
         var wantFullscreen = false;
         var bitmapSession = false;   // rdp/vnc: a server-side resize is slow and visible
         var fsEverEntered = false;   // after the first fullscreen, size to the window again
+        // #257: the launcher adds ?fs=1 for a fullscreen-on-connect entry. We
+        // request fullscreen immediately, here, before the async session fetch
+        // — the window still holds the user activation carried from the Connect
+        // click, which may have lapsed by the time the metadata returns. If the
+        // browser honours it there is no click at all; if not, the cover's
+        // armed gesture still enters it. Showing the cover now also avoids any
+        // flash of the page before the session loads.
+        if (urlParams.get('fs') === '1') {
+            wantFullscreen = true;
+            var _rgEarlyFs = function () {
+                try {
+                    var _g = document.getElementById('fs-gate');
+                    if (_g) {
+                        var _t = document.getElementById('fs-gate-title');
+                        if (_t) _t.textContent = entryName || 'Session';
+                        var _s = document.getElementById('fs-gate-status');
+                        if (_s) _s.textContent = 'Connecting…';
+                        _g.className = 'visible';
+                    }
+                    var _el = document.documentElement;
+                    var _req = _el.requestFullscreen || _el.webkitRequestFullscreen || _el.mozRequestFullScreen || _el.msRequestFullscreen;
+                    if (_req) { var _p = _req.call(_el); if (_p && _p.catch) _p.catch(function () {}); }
+                } catch (e) {}
+            };
+            // Requesting fullscreen during initial parse is refused, so wait for
+            // the document to be interactive — but still before the async
+            // session fetch, so the window keeps the Connect click's activation.
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _rgEarlyFs);
+            else _rgEarlyFs();
+        }
         // Per-entry autohide of the clipboard/files side tabs; populated from
         // the same /api/sessions/:id fetch and read when the tabs are built.
         var wantAutohideTabs = false;
@@ -1499,6 +1529,16 @@
             // Try to enter fullscreen. onReject runs if the browser refuses
             // (e.g. no user activation on load): the caller decides whether to
             // wait for a gesture or give up and show the windowed session.
+            var fsKeyboardLocked = false;
+            function rgOnFullscreenEntered() {
+                if (fsKeyboardLocked) return;
+                fsKeyboardLocked = true;
+                if (navigator.keyboard && navigator.keyboard.lock) {
+                    navigator.keyboard.lock(['Escape']).catch(rgShowEscNoticeOnce);
+                } else {
+                    rgShowEscNoticeOnce();
+                }
+            }
             function rgEnterFullscreen(onReject) {
                 var el = document.documentElement;
                 var req = el.requestFullscreen
@@ -1508,14 +1548,7 @@
                 if (!req) { if (onReject) onReject(); return; }
                 var p;
                 try { p = req.call(el); } catch (e) { if (onReject) onReject(); return; }
-                var onOk = function() {
-                    if (navigator.keyboard && navigator.keyboard.lock) {
-                        navigator.keyboard.lock(['Escape']).catch(rgShowEscNoticeOnce);
-                    } else {
-                        rgShowEscNoticeOnce();
-                    }
-                };
-                if (p && p.then) p.then(onOk).catch(function(){ if (onReject) onReject(); }); else onOk();
+                if (p && p.then) p.then(rgOnFullscreenEntered).catch(function(){ if (onReject) onReject(); }); else rgOnFullscreenEntered();
             }
             function rgExitFullscreen() {
                 try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); } catch (e) {}
@@ -1526,20 +1559,11 @@
                 if (x) { try { x.call(document); } catch (e) {} }
             }
             var fsConnected = false;   // the tunnel has reached CONNECTED
-            var fsRefused = false;     // the load-time fullscreen request was refused
             var fsGestureArmed = false;
             // Reveal the session only once it is both fullscreen and
             // connected: the picture behind the cover is then the final one.
             function rgMaybeReveal() {
                 if (fsConnected && rgFullscreenEl()) rgHideConnectCover();
-            }
-            // The load-time fullscreen request was refused (no activation):
-            // fall back to the user's next press, and say so on the cover.
-            function rgOnFullscreenRefused() {
-                fsRefused = true;
-                if (fsConnected && !rgFullscreenEl())
-                    rgGateStatus('Connected — click to enter fullscreen', true);
-                rgArmFullscreenGesture();
             }
             // Fallback when the load-time fullscreen request is refused: wait
             // for the user's next click or key and enter fullscreen on it. The
@@ -1598,8 +1622,10 @@
             // activation carried from the Connect click. If it is honoured the
             // user never has to act; if not, wait for their next press.
             function rgStartFullscreenOnConnect() {
-                rgShowConnectCover('Connecting…', false);
-                rgEnterFullscreen(rgOnFullscreenRefused);
+                if (!document.getElementById('fs-gate') || !document.getElementById('fs-gate').classList.contains('visible'))
+                    rgShowConnectCover('Connecting\u2026', false);
+                if (rgFullscreenEl()) return;          // early fs=1 request already landed
+                rgArmFullscreenGesture();              // fallback if the browser refused it
             }
             // Tell the remote that nothing is held: every key the keyboard
             // tracks as down, and all mouse buttons at the last pointer
@@ -1667,7 +1693,7 @@
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var bar = document.getElementById('fs-bar');
-                if (inFs) { fsEverEntered = true; rgDisarmFullscreenGesture(); rgReleaseAllInput(); rgMaybeReveal(); } else { rgHideConnectCover(); }
+                if (inFs) { fsEverEntered = true; rgDisarmFullscreenGesture(); rgOnFullscreenEntered(); rgReleaseAllInput(); rgMaybeReveal(); } else { rgHideConnectCover(); }
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
@@ -1750,11 +1776,16 @@
                         // Connected. If this is a fullscreen-on-connect entry
                         // that is already fullscreen, the cover lifts now
                         // (rgMaybeReveal above) onto the final picture. If
-                        // fullscreen is still pending — the load-time request
-                        // was refused — the cover stays and a hint invites the
-                        // single click that enters it. Otherwise nothing to do.
-                        if (wantFullscreen && !rgFullscreenEl() && fsRefused) {
-                            rgGateStatus('Connected \u2014 click to enter fullscreen', true);
+                        // fullscreen hasn't landed yet, give the load-time
+                        // request a moment; if it still hasn't, the cover
+                        // invites the single click that the armed gesture turns
+                        // into fullscreen. Non-fullscreen sessions just reveal.
+                        if (wantFullscreen && !rgFullscreenEl()) {
+                            rgGateStatus('Connected', true);
+                            setTimeout(function() {
+                                if (fsConnected && !rgFullscreenEl())
+                                    rgGateStatus('Connected \u2014 click to enter fullscreen', true);
+                            }, 1200);
                         } else if (!wantFullscreen) {
                             rgHideConnectCover();
                         }

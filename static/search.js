@@ -15,7 +15,7 @@
     if (window.__rgGlobalSearch) return;
     window.__rgGlobalSearch = true;
 
-    var searchIndex = null, searchEngaged = false, searchFilters = null, keepUntil = 0, keepTimer = null;
+    var searchIndex = null, searchEngaged = false, searchFilters = null;
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -259,7 +259,10 @@
             })
             .then(function (data) {
                 if (!data) return;
-                var url = data.client_url + '?name=' + encodeURIComponent(name);
+                var _row = null, _si = searchIndex || [];
+                for (var _k = 0; _k < _si.length; _k++) { var _r = _si[_k]; if (_r.scope === scope && _r.folderPath === folder && _r.entry.name === name) { _row = _r; break; } }
+                var _fs = _row && _row.entry && _row.entry.fullscreen_on_connect;
+                var url = data.client_url + '?name=' + encodeURIComponent(name) + (_fs ? '&fs=1' : '');
                 if (win && !win.closed) win.location.href = url; else window.open(url, '_blank');
             })
             .catch(function () { if (win && !win.closed) win.close(); })
@@ -274,25 +277,18 @@
         var inp = input();
         inp.addEventListener('input', runSearch);
         inp.addEventListener('focus', function () { setEngaged(true); });
-        inp.addEventListener('blur', function () {
-            if (inp.value) return;
-            clearTimeout(keepTimer);
-            keepTimer = setTimeout(function () {
-                if (document.activeElement === inp || inp.value) return;
-                var a = document.activeElement, ov = overlay();
-                if (a && ov && ov.contains(a) && a !== document.body) return;
-                if (keepUntil > Date.now()) return;
-                setEngaged(false);
-            }, 150);
-        });
-        inp.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') { inp.value = ''; inp.blur(); setEngaged(false); e.stopPropagation(); }
-        });
+        // The overlay closes on any mousedown that is not on the search box
+        // or inside the results panel (so the backdrop, the nav, the logo,
+        // anywhere else all close it), and interacting with the results or
+        // the box keeps it open. Capture phase so it runs before result
+        // clicks are handled.
         document.addEventListener('mousedown', function (e) {
+            if (!searchEngaged) return;
+            var gs = document.getElementById('global-search');
             var panel = document.getElementById('search-overlay-panel');
-            if (panel && panel.contains(e.target)) keepUntil = Date.now() + 400;
+            if ((gs && gs.contains(e.target)) || (panel && panel.contains(e.target))) return;
+            close();
         }, true);
-        overlay().addEventListener('mousedown', function (e) { if (e.target === this) close(); });
         document.getElementById('search-results').addEventListener('click', function (e) {
             var t = e.target;
             var open = t.closest && t.closest('.search-open-folder');
@@ -304,8 +300,9 @@
         // capture phase so it runs before page-level handlers. If a facet menu
         // is open inside the overlay, let filters.js close just that first.
         document.addEventListener('keydown', function (e) {
-            if (e.key !== 'Escape' || !searchEngaged) return;
-            if (document.querySelector('#search-overlay .rg-facet.open')) return;
+            if (e.key !== 'Escape') return;
+            if (!searchEngaged && !overlay().classList.contains('open')) return;
+            if (document.querySelector('#search-overlay .rg-facet.open')) return; // let the facet menu close first
             e.preventDefault(); e.stopPropagation(); close();
         }, true);
         // "/" focuses the search unless typing in a field or a modal is open.
