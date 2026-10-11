@@ -2028,6 +2028,11 @@ impl SessionManager {
                 && s.guacd_stream.is_some()
                 && s.created_by == created_by
                 && s.address_book_entry.as_deref() == Some(entry_key)
+                // Only a freshly-created Pending session, so a repeat click
+                // within a few seconds reattaches to the one just made, while
+                // an older Pending (whose guacd may have since died) is left
+                // for the pending-timeout reaper and a fresh one is created.
+                && (Utc::now() - s.created_at).num_seconds() < 15
             {
                 return Some(s.info());
             }
