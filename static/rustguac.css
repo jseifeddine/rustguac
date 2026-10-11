@@ -981,7 +981,7 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
     margin-bottom: var(--s-3);
 }
 .list-tools:empty { display: none; }
-.list-search { flex: 1 1 260px; min-width: 200px; max-width: 520px; }
+.list-tools .list-search { flex: 1 1 260px; min-width: 200px; max-width: 520px; height: var(--ctl-sm); font-size: var(--fz-sm); }
 
 /* ── Modal extras ─────────────────────────────────────── */
 .modal .modal-hint { color: var(--text-muted); font-size: var(--fz-sm); margin: 0 0 var(--s-3); }
