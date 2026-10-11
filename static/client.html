@@ -394,7 +394,9 @@
                 _g.className = 'visible';
             } catch (e) {}
         };
-        if (embedded) {
+        // Windowed (⧉) sessions arrive from the matching splash on
+        // /launch.html, so they keep the cover up until connected too.
+        if (embedded || windowed) {
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _rgEarlyCover);
             else _rgEarlyCover();
         }

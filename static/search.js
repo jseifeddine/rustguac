@@ -238,26 +238,58 @@
         content.scrollTop = 0;
     }
 
+    // "Open in a new window" (⧉): open a sized popup synchronously (inside the
+    // click, so it is not blocked) on the splash page /launch.html, which
+    // measures its own viewport once laid out and posts it back. The caller
+    // creates the session at exactly that size, so nothing resizes after the
+    // first paint. A popup's size cannot be read from here right after
+    // window.open — it reports the opener's size until the window is laid out
+    // (that was the RDP resize on ⧉). Resolves {width,height} either way:
+    // defaults if the popup was blocked, or after 2.5s if it never answers.
+    function rgOpenSessionWindow(name) {
+        var win = window.open('/launch.html?name=' + encodeURIComponent(name), '_blank',
+            'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+        var size = new Promise(function (resolve) {
+            var done = false;
+            function fin(w, h) {
+                if (done) return; done = true;
+                window.removeEventListener('message', onMsg); clearTimeout(cap);
+                resolve({ width: w > 0 ? w : 1280, height: h > 0 ? h : 800 });
+            }
+            function onMsg(e) {
+                if (e.origin !== location.origin || !e.data || e.data.rgLaunch !== 'size' || e.source !== win) return;
+                fin(e.data.width, e.data.height);
+            }
+            var cap = null;
+            if (!win) { fin(0, 0); return; }
+            window.addEventListener('message', onMsg);
+            cap = setTimeout(function () {
+                var w = 0, h = 0; try { w = win.innerWidth; h = win.innerHeight; } catch (e) {}
+                fin(w, h);
+            }, 2500);
+        });
+        return { win: win, size: size };
+    }
+    window.rgOpenSessionWindow = rgOpenSessionWindow;
+
     // Connect to an entry: open the client in a window opened within this click
     // (keeps activation for fullscreen). Missing credentials send the user to
     // the connections page to set them.
     function doConnect(scope, folder, name, btn, newWindow) {
-        // The ⧉ button gets a sized popup, a plain Connect a tab.
-        var win = newWindow
-            ? window.open('', '_blank', 'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no')
-            : window.open('', '_blank');
+        // The ⧉ button gets a sized popup (measured, see above), a plain Connect a tab.
+        var pop = newWindow ? rgOpenSessionWindow(name) : null;
+        var win = pop ? pop.win : window.open('', '_blank');
         if (btn) { btn.classList.add('loading'); btn.disabled = true; }
         var reset = function () { if (btn) { btn.classList.remove('loading'); btn.disabled = false; } };
         var body = { width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) };
-        if (newWindow) {
-            // Create the session at the popup's size so it needs no resize.
-            var pw = 0, ph = 0;
-            try { if (win) { pw = win.innerWidth; ph = win.innerHeight; } } catch (e) {}
-            body.width = pw > 0 ? pw : 1280; body.height = ph > 0 ? ph : 800;
-        }
-        if (window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
-        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
-            { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
+        // screen_* only for the tab path (the server prefers it for a
+        // fullscreen bitmap entry); a popup is sized by its measurement alone.
+        if (!newWindow && window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
+        (pop ? pop.size : Promise.resolve(null)).then(function (sz) {
+            if (sz) { body.width = sz.width; body.height = sz.height; }
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
+                { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) });
+        })
             .then(function (res) {
                 if (!res.ok) {
                     if (win && !win.closed) win.close();
