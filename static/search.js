@@ -283,8 +283,10 @@
     // Connect to an entry: open the client in a window opened within this click
     // (keeps activation for fullscreen). Missing credentials send the user to
     // the connections page to set them.
-    function doConnect(scope, folder, name) {
+    function doConnect(scope, folder, name, btn) {
         var win = window.open('', '_blank');
+        if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+        var reset = function () { if (btn) { btn.classList.remove('loading'); btn.disabled = false; } };
         var body = { width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) };
         if (window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
@@ -302,7 +304,8 @@
                 var url = data.client_url + '?name=' + encodeURIComponent(name);
                 if (win && !win.closed) win.location.href = url; else window.open(url, '_blank');
             })
-            .catch(function () { if (win && !win.closed) win.close(); });
+            .catch(function () { if (win && !win.closed) win.close(); })
+            .then(reset, reset);
     }
     function openFolder(scope, path) {
         location.href = '/connections.html#open=' + encodeURIComponent(scope + '/' + path);
@@ -336,7 +339,7 @@
             var open = t.closest && t.closest('.search-open-folder');
             if (open) { e.preventDefault(); openFolder(open.getAttribute('data-open-scope'), open.getAttribute('data-open-folder')); return; }
             var conn = t.closest && t.closest('[data-sc-connect]');
-            if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect')); }
+            if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect'), conn); }
         });
         // "/" focuses the search unless typing in a field or a modal is open.
         document.addEventListener('keydown', function (e) {
