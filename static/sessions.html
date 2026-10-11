@@ -629,7 +629,9 @@
                     tdId.appendChild(idLink);
                     tr.appendChild(tdId);
 
-                    tr.appendChild(h('td', s.session_type));
+                    var tdType = document.createElement('td');
+                    tdType.appendChild(h('span', s.session_type, { 'class': 'type-badge type-' + s.session_type }));
+                    tr.appendChild(tdType);
                     tr.appendChild(h('td', hostCol));
                     tr.appendChild(h('td', s.username));
                     tr.appendChild(h('td', s.created_by || '', { 'class': isOwn ? 'owner-self' : 'owner-other' }));

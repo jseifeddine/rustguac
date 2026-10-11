@@ -353,6 +353,7 @@ tbody tr:last-child td { border-bottom: none; }
 .type-vnc { background: var(--type-vnc-bg); color: var(--type-vnc-fg); }
 .type-web { background: var(--type-web-bg); color: var(--type-web-fg); }
 .type-vdi { background: var(--type-vdi-bg); color: var(--type-vdi-fg); }
+.type-proxmox { background: #e57000; color: #000; }
 
 /* ── Section heading strip (used above grids/lists) ──────── */
 .section-head {
