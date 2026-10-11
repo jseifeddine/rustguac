@@ -2011,6 +2011,30 @@ impl SessionManager {
         result
     }
 
+    /// Find a live session this user can be sent back to instead of opening a
+    /// fresh one for the same address-book entry. Reusing a `Pending` session
+    /// (guacd connected, owner never attached) stops repeat Connect clicks from
+    /// piling up orphans; only a Pending session is reusable, since an owner
+    /// connection consumes the guacd stream and cannot be re-owned.
+    pub async fn find_reusable_session(
+        &self,
+        created_by: &str,
+        entry_key: &str,
+    ) -> Option<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        for session in sessions.values() {
+            let s = session.lock().await;
+            if s.status == SessionStatus::Pending
+                && s.guacd_stream.is_some()
+                && s.created_by == created_by
+                && s.address_book_entry.as_deref() == Some(entry_key)
+            {
+                return Some(s.info());
+            }
+        }
+        None
+    }
+
     /// Get a specific session's info.
     pub async fn get_session(&self, id: Uuid) -> Option<SessionInfo> {
         let sessions = self.sessions.read().await;

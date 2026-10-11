@@ -668,7 +668,8 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; \
     connect-src 'self' wss: ws:; \
-    img-src 'self' data: blob:";
+    img-src 'self' data: blob:; \
+    frame-ancestors 'self'";
 
 async fn security_headers(
     tls: Extension<TlsEnabled>,
@@ -678,7 +679,11 @@ async fn security_headers(
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    // SAMEORIGIN (not DENY) so the Connections page can host a session in a
+    // full-viewport same-origin iframe for zero-click fullscreen-on-connect.
+    // Cross-origin framing stays blocked (clickjacking); CSP frame-ancestors
+    // 'self' is the modern equivalent for browsers that honour it.
+    headers.insert("X-Frame-Options", "SAMEORIGIN".parse().unwrap());
     headers.insert(
         "Referrer-Policy",
         "strict-origin-when-cross-origin".parse().unwrap(),

@@ -3273,8 +3273,32 @@ pub fn initial_session_size(
 ) -> (Option<u32>, Option<u32>) {
     let bitmap = matches!(session_type, "rdp" | "vnc");
     match (bitmap && fullscreen_on_connect, screen) {
-        (true, (Some(w), Some(h))) if w > 0 && h > 0 => (Some(w), Some(h)),
+        (true, (Some(w), Some(h))) if w > 0 && h > 0 => {
+            // RDP's display channel rounds every size down to a multiple of 16
+            // (patches/007, which prevents the H.264 green band). Create the
+            // session at that same rounded size so it already matches the
+            // client's first post-connect size send: guacd coalesces them and
+            // there is no resize, so the H.264 hardware decoder is not rebuilt
+            // and the video never stalls on connect (#257). VNC has no such
+            // rounding, so it keeps the exact screen size.
+            if session_type == "rdp" {
+                (Some(round_down_mod16(w)), Some(round_down_mod16(h)))
+            } else {
+                (Some(w), Some(h))
+            }
+        }
         _ => window,
+    }
+}
+
+/// Round a dimension down to a multiple of 16, with a 16px floor so a tiny
+/// screen never rounds to zero. Mirrors guacd's RDP display-channel rounding.
+fn round_down_mod16(v: u32) -> u32 {
+    let r = v - (v % 16);
+    if r < 16 {
+        16
+    } else {
+        r
     }
 }
 
@@ -3404,6 +3428,7 @@ pub async fn ab_connect_entry(
     // Build CreateSessionRequest from the Vault entry + connect request display params.
     // ConnectRequest credentials override address book values (for prompted credentials).
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    let reuse_entry_key = ab_entry_key.clone();
     let (initial_width, initial_height) = initial_session_size(
         &ab_entry.session_type,
         ab_entry.fullscreen_on_connect.unwrap_or(false),
@@ -3504,6 +3529,21 @@ pub async fn ab_connect_entry(
         scope = %scope,
         "Address book connect requested"
     );
+
+    // Reuse a Pending session this user already opened for this entry rather
+    // than spawning a duplicate (e.g. a repeat Connect click). Scoped by the
+    // entry key stored on the session.
+    if let Some(existing) = manager
+        .find_reusable_session(&admin_name, &reuse_entry_key)
+        .await
+    {
+        tracing::info!(
+            user = %admin_name,
+            session_id = %existing.session_id,
+            "Reusing existing address book session"
+        );
+        return (StatusCode::CREATED, Json(json!(existing))).into_response();
+    }
 
     match manager.create_session(create_req, admin_name.clone()).await {
         Ok(info) => {
@@ -6300,10 +6340,19 @@ mod tests {
     fn fullscreen_sizing_applies_to_bitmap_sessions_only() {
         let win = (Some(1710), Some(954));
         let scr = (Some(1710), Some(1112));
-        // RDP/VNC opening fullscreen: created at the screen's size, painted
-        // behind the cover and revealed in fullscreen with no resize.
-        assert_eq!(initial_session_size("rdp", true, win, scr), scr);
+        // RDP opening fullscreen: created at the screen size rounded down to
+        // a multiple of 16, matching guacd's display-channel rounding so there
+        // is no post-connect resize (#257). VNC is not mod-16 rounded.
+        assert_eq!(
+            initial_session_size("rdp", true, win, scr),
+            (Some(1696), Some(1104))
+        );
         assert_eq!(initial_session_size("vnc", true, win, scr), scr);
+        // A screen that is already mod-16 is created at its exact size.
+        assert_eq!(
+            initial_session_size("rdp", true, win, (Some(1920), Some(1088))),
+            (Some(1920), Some(1088))
+        );
         // a terminal reflows instantly: window size, fullscreen or not
         assert_eq!(initial_session_size("ssh", true, win, scr), win);
         assert_eq!(initial_session_size("telnet", true, win, scr), win);
