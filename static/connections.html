@@ -163,6 +163,10 @@
             font-size: var(--fz-xl); color: var(--text);
             font-weight: bold; letter-spacing: 0.02em; line-height: 1.3;
         }
+        .entries-heading { display: inline-flex; flex-direction: column; line-height: 1.15; }
+        .entries-key { color: var(--text-dim); font-size: var(--fz-sm); letter-spacing: 0.04em; }
+        .entries-key:empty { display: none; }
+        .folder-desc.folder-key { letter-spacing: 0.04em; }
         .folder-actions .desc {
             color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
         }
@@ -563,6 +567,18 @@
             background: rgba(255,255,255,0.015);
         }
         .main { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--s-2); }
+        /* The folder header (name, description, search, actions, filters)
+           pins to the top of the entries pane, so it stays under the nav and
+           the active-sessions strip while a long table scrolls beneath it. */
+        #entries-header {
+            position: sticky; top: 0; z-index: 30;
+            background: var(--bg);
+            padding-bottom: var(--s-2);
+            margin-bottom: var(--s-2);
+            box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.6);
+        }
+        #entries-header .folder-actions { margin-bottom: 0; }
+        #entries-header #entries-filters { margin: var(--s-2) 0 0 0; }
 
         /* Sidebar panel: one pinned header band (label, new-folder button,
            filter) on a surface tone, then the list with hairline dividers.
@@ -613,7 +629,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
         <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="#" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
+        <a href="#" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
             <span id="user-menu-btn" title="Preferences">&#9881; Settings</span>
@@ -675,7 +691,10 @@
             <div class="main">
                 <div id="entries-header" style="display:none">
                     <div class="folder-actions">
-                        <strong id="entries-title"></strong>
+                        <span class="entries-heading">
+                            <strong id="entries-title"></strong>
+                            <span id="entries-key" class="entries-key"></span>
+                        </span>
                         <span id="entries-desc" class="desc"></span>
                         <input type="search" id="connections-search" class="connections-search" placeholder="Search connections..." autocomplete="off" disabled />
                         <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
@@ -683,6 +702,7 @@
                         <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
                         <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
                     </div>
+                    <div id="entries-filters" class="list-tools"></div>
                 </div>
                 <div id="entries-content">
                     <p class="empty">Select a folder to view entries.</p>
@@ -708,6 +728,9 @@
             <div class="field-hint">Alphanumeric, hyphens, underscores, dots only.</div>
             <label>Description
                 <input type="text" id="fm-desc" placeholder="e.g. Infrastructure servers">
+            </label>
+            <label>Display name <span class="hint">(optional; shown as the title, with the folder name beneath)</span>
+                <input type="text" id="fm-display" placeholder="e.g. Dani &amp; Fiori's Gourmet Pizzeria" maxlength="120">
             </label>
             <label>Allowed groups</label>
             <div class="chip-picker" id="fm-groups-picker">
@@ -1343,7 +1366,8 @@
         </div>
     </div>
 
-    <script>
+<script src="/filters.js"></script>
+        <script>
         function togglePw(btn){var inp=btn.previousElementSibling;if(inp.type==='password'){inp.type='text';btn.textContent='\u25CB'}else{inp.type='password';btn.textContent='\u25CF'}}
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='aurora';
@@ -2015,6 +2039,7 @@
                         name: f.name,
                         scope: f.scope,
                         description: f.description || '',
+                        display_name: f.display_name || '',
                         path: f.path || f.name,
                         has_children: !!f.has_children
                     };
@@ -2170,8 +2195,11 @@
             nameRow.className = 'folder-name-row';
             var nameSpan = document.createElement('span');
             nameSpan.className = 'folder-name';
-            nameSpan.textContent = f.name;
-            nameSpan.title = f.name;
+            // Title is the display name when one is set (e.g. the NetBox tenant
+            // name); the folder key then goes on the subline. Without one the
+            // key is the title and the description the subline.
+            nameSpan.textContent = f.display_name || f.name;
+            nameSpan.title = f.display_name ? f.name + (f.description ? ' \u2014 ' + f.description : '') : (f.description || f.name);
             nameRow.appendChild(nameSpan);
             if (folderEntryCounts[key] !== undefined) {
                 // Entry count as a small right-aligned pill on the name line.
@@ -2193,10 +2221,10 @@
                 nameRow.appendChild(scopeBadge);
             }
             main.appendChild(nameRow);
-            if (f.description) {
+            if (f.display_name || f.description) {
                 var desc = document.createElement('span');
-                desc.className = 'folder-desc';
-                desc.textContent = f.description;
+                desc.className = 'folder-desc' + (f.display_name ? ' folder-key' : '');
+                desc.textContent = f.display_name ? f.name : f.description;
                 main.appendChild(desc);
             }
             row.appendChild(main);
@@ -2272,6 +2300,7 @@
                         name: sf.name,
                         scope: sf.scope,
                         description: sf.description || '',
+                        display_name: sf.display_name || '',
                         path: sf.path || (path + '/' + sf.name),
                         has_children: !!sf.has_children
                     };
@@ -2462,10 +2491,15 @@
             bulkSel.names.clear();
             updateBulkBar();
             var content = document.getElementById('entries-content');
+            entryFilters.show('folder', true);
+            entryFilters.update(matches.map(function(m) { return m.row; }));
+            var allMatches = matches;
+            matches = matches.filter(function(m) { return entryFilters.apply([m.row]).length > 0; });
             if (matches.length === 0) {
                 content.innerHTML = '<div class="empty-state" style="padding:2em;margin:1em 0">' +
-                    '<p style="color:var(--text-dim);margin:0">No matches for ' + escapeHtml(query) + '</p>' +
-                    '</div>';
+                    '<p style="color:var(--text-dim);margin:0">' +
+                    (allMatches.length ? 'No matches for ' + escapeHtml(query) + ' with the current filters' : 'No matches for ' + escapeHtml(query)) +
+                    '</p></div>';
                 return;
             }
             var maxResults = 50;
@@ -2568,8 +2602,10 @@
         function loadEntries(scope, folderPath, forceRefresh) {
             var header = document.getElementById('entries-header');
             header.style.display = '';
-            document.getElementById('entries-title').textContent = folderPath;
             var f = findFolder(scope, folderPath);
+            var dn = f && f.display_name ? f.display_name : '';
+            document.getElementById('entries-title').textContent = dn || folderPath;
+            document.getElementById('entries-key').textContent = dn ? folderPath : '';
             document.getElementById('entries-desc').textContent = f && f.description ? f.description : '';
 
             var cacheKey = folderKey(scope, folderPath);
@@ -2710,10 +2746,37 @@
             }
         }
 
-        function renderEntries(entries, scope, folder) {
-            lastEntriesRender = { entries: entries, scope: scope, folder: folder };
-            bulkSyncSelection(entries, scope, folder);
+        // Shared facet filters (filters.js) above the entries table: Type in a
+        // folder, Type and Folder across search results. Selections persist in
+        // sessionStorage for this tab; the Folder facet only applies while
+        // searching.
+        var entryFilters = rgFilters.create({
+            mount: document.getElementById('entries-filters'),
+            id: 'connections',
+            facets: [
+                { key: 'type', label: 'Type',
+                  value: function(x) { var e = x.entry || x; return e.session_type; },
+                  render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } },
+                { key: 'folder', label: 'Folder', value: function(x) { return x.folderPath || null; } }
+            ],
+            onChange: function() {
+                if (searchActive) runSearch();
+                else if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+            }
+        });
+
+        function renderEntries(allEntries, scope, folder) {
+            lastEntriesRender = { entries: allEntries, scope: scope, folder: folder };
+            bulkSyncSelection(allEntries, scope, folder);
             var content = document.getElementById('entries-content');
+            entryFilters.show('folder', false);
+            entryFilters.update(allEntries);
+            var entries = entryFilters.apply(allEntries);
+            if (entries.length === 0 && allEntries.length > 0) {
+                updateBulkBar();
+                content.innerHTML = '<p class="empty">No entries match the current filters.</p>';
+                return;
+            }
             if (entries.length === 0) {
                 updateBulkBar();
                 if (isAdmin) {
@@ -3370,6 +3433,7 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
+            document.getElementById('fm-display').value = '';
             document.getElementById('fm-scope').value = 'shared';
             document.getElementById('fm-scope').disabled = false;
             document.getElementById('fm-error').textContent = '';
@@ -3392,6 +3456,7 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
+            document.getElementById('fm-display').value = '';
             document.getElementById('fm-scope').value = subfolderParent.scope;
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
@@ -3417,6 +3482,7 @@
             document.getElementById('fm-name').value = selectedFolder.name;
             document.getElementById('fm-name').disabled = true;
             document.getElementById('fm-desc').value = selectedFolder.description || '';
+            document.getElementById('fm-display').value = selectedFolder.display_name || '';
             document.getElementById('fm-scope').value = selectedFolder.scope;
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
@@ -3556,6 +3622,7 @@
         document.getElementById('fm-save').addEventListener('click', function() {
             var name = document.getElementById('fm-name').value.trim();
             var desc = document.getElementById('fm-desc').value.trim();
+            var displayName = document.getElementById('fm-display').value.trim();
             // Include anything still typed in the group input but not chipped yet
             addFmGroupFromInput();
             var groups = fmGroups.slice();
@@ -3579,7 +3646,7 @@
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
                     body: JSON.stringify(Object.assign(
-                        { allowed_groups: groups, description: desc, inherit_from_parent: document.getElementById('fm-inherit').checked },
+                        { allowed_groups: groups, description: desc, display_name: displayName, inherit_from_parent: document.getElementById('fm-inherit').checked },
                         // Only send the list once it has loaded: an omitted
                         // field keeps the stored list, an empty one clears it.
                         fmUsersLoaded ? { allowed_users: users } : {}
@@ -3592,7 +3659,7 @@
                 .then(function() {
                     document.getElementById('folder-modal').classList.remove('active');
                     // Update selected folder description
-                    if (selectedFolder) selectedFolder.description = desc;
+                    if (selectedFolder) { selectedFolder.description = desc; selectedFolder.display_name = displayName; }
                     loadFolders();
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
@@ -3604,7 +3671,7 @@
                     method: 'POST',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, allowed_users: users, description: desc, scope: postScope, inherit_from_parent: document.getElementById('fm-inherit').checked })
+                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, allowed_users: users, description: desc, display_name: displayName, scope: postScope, inherit_from_parent: document.getElementById('fm-inherit').checked })
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
@@ -3622,7 +3689,7 @@
                         delete subfolderCache[parentKey];
                         var parent = findFolder(parentScope, parentPath);
                         if (parent) parent.has_children = true;
-                        selectedFolder = { name: name, scope: postScope, description: desc, path: fullPath, has_children: false };
+                        selectedFolder = { name: name, scope: postScope, description: desc, display_name: displayName, path: fullPath, has_children: false };
                         saveSelectedFolder();
                         subfolderParent = null;
                         loadSubfolders(parentScope, parentPath, function() {
@@ -3630,7 +3697,7 @@
                             loadEntries(selectedFolder.scope, fullPath, true);
                         });
                     } else {
-                        selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                        selectedFolder = { name: name, scope: scope, description: desc, display_name: displayName, path: name, has_children: false };
                         saveSelectedFolder();
                         loadFolders();
                     }
