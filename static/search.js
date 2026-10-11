@@ -48,6 +48,7 @@
 
     function injectStyle() {
         var css = [
+            '.brand-row{position:relative;z-index:300}',
             '.global-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,42vw);min-width:320px;display:flex;align-items:center}',
             '.global-search input[type="search"]{width:100%;height:48px;padding:0 52px 0 46px;font-size:var(--fz-lg);background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);box-sizing:border-box;font-family:monospace;transition:border-color .15s,box-shadow .15s}',
             '.global-search input[type="search"]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}',
@@ -93,9 +94,10 @@
         var brand = document.querySelector('.brand-row');
         if (brand) {
             brand.style.position = 'relative';
+            brand.style.zIndex = '300';
             var gs = document.createElement('div');
             gs.className = 'global-search'; gs.id = 'global-search';
-            gs.innerHTML = '<span class="global-search-icon" aria-hidden="true">⌘</span>' +
+            gs.innerHTML = '<span class="global-search-icon" aria-hidden="true">⚲</span>' +
                 '<input type="search" id="rg-search" placeholder="Search connections…" autocomplete="off" spellcheck="false" aria-label="Search connections" disabled />' +
                 '<kbd class="global-search-key" title="Press / to search">/</kbd>';
             brand.appendChild(gs);
@@ -111,27 +113,68 @@
     function input() { return document.getElementById('rg-search'); }
     function overlay() { return document.getElementById('search-overlay'); }
 
-    function loadIndex() {
+    // The index is cached per session so moving between pages is instant and
+    // doesn't re-index. It is only re-fetched when the address book's version
+    // changes (polled), which the connections page bumps when anything is
+    // edited. The connections page itself always loads a fresh copy.
+    var IDX_KEY = 'rustguac_search_index_v1', VER_KEY = 'rustguac_search_version_v1';
+    var knownVersion = null, pollTimer = null;
+
+    function buildIndex(rows) {
+        return rows.map(function (r) {
+            var e = r.entry;
+            var label = e.display_name || e.name;
+            var host = e.session_type === 'web' ? (e.url || '')
+                : e.session_type === 'vdi' ? (e.container_image || '')
+                : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
+                : (e.hostname || '');
+            var haystack = [e.name, e.display_name || '', host, e.username || '', e.proxmox_token_id || '', e.url || '', e.domain || '', e.session_type, r.folder_path].join(' ').toLowerCase();
+            return { scope: r.scope, folderPath: r.folder_path, entry: e, label: label, host: host, haystack: haystack };
+        });
+    }
+    function applyIndex(idx) {
+        searchIndex = idx;
         var inp = input(); if (!inp) return;
+        inp.placeholder = 'Search ' + idx.length + ' connection' + (idx.length === 1 ? '' : 's') + '…';
+        inp.disabled = false;
+        if (searchEngaged) runSearch();
+    }
+    function fetchIndex(version) {
+        var inp = input();
         fetch('/api/addressbook/search-index', { headers: headers(), credentials: 'same-origin' })
             .then(function (r) { if (!r.ok) throw new Error('index'); return r.json(); })
             .then(function (data) {
-                var rows = (data && data.entries) || [];
-                searchIndex = rows.map(function (r) {
-                    var e = r.entry;
-                    var label = e.display_name || e.name;
-                    var host = e.session_type === 'web' ? (e.url || '')
-                        : e.session_type === 'vdi' ? (e.container_image || '')
-                        : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
-                        : (e.hostname || '');
-                    var haystack = [e.name, e.display_name || '', host, e.username || '', e.proxmox_token_id || '', e.url || '', e.domain || '', e.session_type, r.folder_path].join(' ').toLowerCase();
-                    return { scope: r.scope, folderPath: r.folder_path, entry: e, label: label, host: host, haystack: haystack };
-                });
-                inp.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '…';
-                inp.disabled = false;
-                if (searchEngaged) runSearch();
+                var idx = buildIndex((data && data.entries) || []);
+                applyIndex(idx);
+                try {
+                    sessionStorage.setItem(IDX_KEY, JSON.stringify(idx));
+                    if (version != null) sessionStorage.setItem(VER_KEY, String(version));
+                } catch (e) {}
+                knownVersion = version;
             })
-            .catch(function () { inp.placeholder = 'Search unavailable'; });
+            .catch(function () { if (!searchIndex && inp) inp.placeholder = 'Search unavailable'; });
+    }
+    // Compare the server's address-book version with ours; fetch only on change.
+    function checkVersion(cachedOk) {
+        fetch('/api/addressbook/version', { headers: headers(), credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (!data || typeof data.version !== 'number') { if (!cachedOk) fetchIndex(null); return; }
+                var v = data.version;
+                if (cachedOk && String(v) === String(knownVersion)) return; // up to date
+                fetchIndex(v);
+            })
+            .catch(function () { if (!cachedOk && !searchIndex) fetchIndex(null); });
+    }
+    function loadIndex() {
+        var cached = null;
+        try {
+            var raw = sessionStorage.getItem(IDX_KEY);
+            if (raw) { cached = JSON.parse(raw); knownVersion = sessionStorage.getItem(VER_KEY); }
+        } catch (e) { cached = null; }
+        if (cached && cached.length != null) applyIndex(cached);   // instant, no re-index flash
+        checkVersion(!!cached);                                    // refresh only if changed
+        if (!pollTimer) pollTimer = setInterval(function () { if (!document.hidden) checkVersion(true); }, 30000);
     }
 
     function setEngaged(on) {
