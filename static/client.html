@@ -332,6 +332,11 @@
         // POST /api/ws-ticket and hands the browser /client/{id}?ticket=...
         var urlTicket = urlParams.get('ticket');
         var entryName = urlParams.get('name');
+        // Embedded in a full-viewport iframe on the launcher tab (that tab is
+        // already fullscreen, so this page does no fullscreen of its own and
+        // just fills the frame; it tells the parent when the session ends).
+        var embedded = urlParams.get('embedded') === '1';
+        function rgNotifyParent(kind) { if (!embedded) return; try { window.parent.postMessage({ rgSession: kind }, location.origin); } catch (e) {} }
         // Populated from /api/sessions/:id when the session is backed by a
         // Connections entry. Used by the Reconnect button to launch a fresh
         // session against the same entry instead of reloading a dead one.
@@ -349,7 +354,7 @@
         // browser honours it there is no click at all; if not, the cover's
         // armed gesture still enters it. Showing the cover now also avoids any
         // flash of the page before the session loads.
-        if (urlParams.get('fs') === '1') {
+        if (urlParams.get('fs') === '1' && !embedded) {
             wantFullscreen = true;
             var _rgEarlyFs = function () {
                 try {
@@ -448,7 +453,7 @@
                     };
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
-                if (session && session.fullscreen_on_connect) wantFullscreen = true;
+                if (session && session.fullscreen_on_connect && !embedded) wantFullscreen = true;
                 bitmapSession = !!(session && (session.session_type === 'rdp' || session.session_type === 'vnc'));
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 return showBanner(session.banner);
@@ -1725,6 +1730,7 @@
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; rgGateStatus('Waiting for server...', false); break;
                     case Guacamole.Client.State.CONNECTED:
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
+                        rgNotifyParent('ready');
                         fsConnected = true;
                         rgGateStatus('Connected', true);
                         rgMaybeReveal();
@@ -1803,6 +1809,7 @@
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
                         rgDisarmFullscreenGesture(); rgHideConnectCover();
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
+                        if (embedded) { rgNotifyParent('end'); break; }
                         document.getElementById('disconnected-overlay').className = 'visible';
                         if (rgFullscreenEl()) rgExitFullscreen();
                         // Reflect the disconnect in any open monitor pop-outs

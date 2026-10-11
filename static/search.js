@@ -268,6 +268,62 @@
             .catch(function () { if (win && !win.closed) win.close(); })
             .then(reset, reset);
     }
+    // Zero-click fullscreen: a browser only lets the tab that holds the Connect
+    // gesture go fullscreen, so for a fullscreen-on-connect entry we fullscreen
+    // THIS tab now and load the session in a full-viewport iframe (the embedded
+    // client fills it). No new tab, no second click. If the browser refuses
+    // fullscreen the session still loads in the overlay, filling the tab.
+    function rgLaunchFullscreen(scope, folder, name, btn) {
+        var el = document.documentElement;
+        var req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+        if (req) { try { var fp = req.call(el); if (fp && fp.catch) fp.catch(function () {}); } catch (e) {} }
+        var ov = document.createElement('div'); ov.id = 'rg-session-overlay';
+        ov.innerHTML = '<div id="rg-session-spinner"></div>' +
+            '<button id="rg-session-exit" type="button" title="Exit">× Exit</button>' +
+            '<iframe id="rg-session-frame" allow="fullscreen; clipboard-read; clipboard-write" title="Session"></iframe>';
+        document.body.appendChild(ov);
+        if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+        var done = false, enteredFs = false;
+        function teardown() {
+            if (done) return; done = true;
+            window.removeEventListener('message', onMsg);
+            document.removeEventListener('fullscreenchange', onFsChange);
+            var o = document.getElementById('rg-session-overlay'); if (o) o.remove();
+            if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
+            try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); } catch (e) {}
+        }
+        function onMsg(e) {
+            if (e.origin !== location.origin || !e.data) return;
+            if (e.data.rgSession === 'ready') { var sp = document.getElementById('rg-session-spinner'); if (sp) sp.style.display = 'none'; }
+            else if (e.data.rgSession === 'end') teardown();
+        }
+        function onFsChange() { if (document.fullscreenElement) { enteredFs = true; } else if (enteredFs) { teardown(); } }
+        window.addEventListener('message', onMsg);
+        document.addEventListener('fullscreenchange', onFsChange);
+        document.getElementById('rg-session-exit').addEventListener('click', teardown);
+        // Create the session at the screen size (the session's final, fullscreen
+        // size) so there is no resize once the embedded client paints.
+        var body = { dpi: Math.round((window.devicePixelRatio || 1) * 96) };
+        if (window.screen && screen.width > 0) { body.width = screen.width; body.height = screen.height; body.screen_width = screen.width; body.screen_height = screen.height; }
+        else { body.width = window.innerWidth; body.height = window.innerHeight; }
+        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
+            { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
+            .then(function (res) {
+                if (!res.ok) { if (res.status === 412) { teardown(); openFolder(scope, folder); return null; } return res.text().then(function (t) { throw new Error(t); }); }
+                return res.json();
+            })
+            .then(function (data) {
+                if (!data) return;
+                var fr = document.getElementById('rg-session-frame');
+                if (!fr) return;
+                fr.src = data.client_url + '?name=' + encodeURIComponent(name) + '&embedded=1';
+                // Fallback: hide the spinner if 'ready' never arrives.
+                setTimeout(function () { var sp = document.getElementById('rg-session-spinner'); if (sp) sp.style.display = 'none'; }, 8000);
+            })
+            .catch(function (err) { teardown(); if (window.rgAlert) rgAlert('Connect failed: ' + err.message); });
+    }
+    window.rgLaunchFullscreen = rgLaunchFullscreen;
+
     function openFolder(scope, path) {
         if (typeof window.rgSelectFolder === 'function') { close(); window.rgSelectFolder(scope, path); return; }
         location.href = '/connections.html#open=' + encodeURIComponent(scope + '/' + path);
@@ -294,7 +350,18 @@
             var open = t.closest && t.closest('.search-open-folder');
             if (open) { e.preventDefault(); openFolder(open.getAttribute('data-open-scope'), open.getAttribute('data-open-folder')); return; }
             var conn = t.closest && t.closest('[data-sc-connect]');
-            if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect'), conn); }
+            if (conn) {
+                e.preventDefault();
+                var sc = conn.getAttribute('data-scope'), fo = conn.getAttribute('data-folder'), nm = conn.getAttribute('data-sc-connect');
+                var row = null, si = searchIndex || [];
+                for (var k = 0; k < si.length; k++) { if (si[k].scope === sc && si[k].folderPath === fo && si[k].entry.name === nm) { row = si[k]; break; } }
+                var fsoc = row && row.entry && row.entry.fullscreen_on_connect;
+                // The regular Connect goes zero-click fullscreen in this tab; the
+                // ⧉ button is an explicit "open in a new window", so it keeps the
+                // new-window path.
+                if (fsoc && !conn.classList.contains('btn-connect-win')) { close(); rgLaunchFullscreen(sc, fo, nm, conn); }
+                else doConnect(sc, fo, nm, conn);
+            }
         });
         // Escape closes the overlay from anywhere (not only the search box);
         // capture phase so it runs before page-level handlers. If a facet menu

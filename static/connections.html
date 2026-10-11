@@ -3215,6 +3215,10 @@
                 // (RDP and SSH entries without passwords/keys)
                 if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web' && entry.session_type !== 'vdi' && entry.session_type !== 'proxmox') {
                     showCredPrompt(entry, scope, folder, btn, newWindow);
+                } else if (entry && entry.fullscreen_on_connect && !newWindow && typeof window.rgLaunchFullscreen === 'function') {
+                    // Zero-click fullscreen: fullscreen this tab on the click and
+                    // load the session in a full-viewport iframe (search.js).
+                    window.rgLaunchFullscreen(scope, folder, name, btn);
                 } else {
                     doConnect(scope, folder, name, btn, undefined, newWindow);
                 }

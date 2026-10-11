@@ -1124,3 +1124,24 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
 .search-results .search-open-folder { margin-left: var(--s-3); white-space: nowrap; color: var(--accent); text-decoration: none; font-size: var(--fz-sm); }
 .search-results .search-open-folder:hover { text-decoration: underline; }
 .search-more { color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-3) 0; }
+
+/* ── Embedded fullscreen session (search.js rgLaunchFullscreen) ──
+   The launcher tab goes fullscreen on the Connect click (the only moment a
+   gesture is available) and the session loads in a full-viewport iframe here,
+   so there is no second click. */
+#rg-session-overlay { position: fixed; inset: 0; z-index: 5000; background: #000; }
+#rg-session-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+#rg-session-spinner {
+    position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+    border: 3px solid rgba(255,255,255,0.25); border-top-color: var(--accent, #5bc0be);
+    border-radius: 50%; animation: rg-btn-spin 0.8s linear infinite;
+}
+#rg-session-exit {
+    position: absolute; top: 10px; right: 14px; z-index: 5001;
+    height: 32px; padding: 0 var(--s-3, 14px);
+    background: rgba(20,24,38,0.72); color: var(--text, #e0e0e0);
+    border: 1px solid var(--border, #333); border-radius: var(--radius, 2px);
+    font-family: monospace; font-size: var(--fz-sm, 16px); cursor: pointer;
+    opacity: 0.35; transition: opacity 0.15s;
+}
+#rg-session-exit:hover { opacity: 1; background: var(--surface, #16213e); border-color: var(--primary, #e94560); color: var(--text, #e0e0e0); }
