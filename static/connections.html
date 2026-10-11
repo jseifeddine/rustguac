@@ -3085,7 +3085,13 @@
             }
             var body = extraBody || {};
             // Send browser dimensions so RDP sessions start at correct resolution
+            // — the popup's own, for ⧉, so the session needs no resize on load.
             var bw = window.innerWidth, bh = window.innerHeight;
+            if (newWindow) {
+                var pw = 0, ph = 0;
+                try { if (targetWin) { pw = targetWin.innerWidth; ph = targetWin.innerHeight; } } catch (e) {}
+                bw = pw > 0 ? pw : 1280; bh = ph > 0 ? ph : 800;
+            }
             if (!body.width && bw > 0 && bh > 0) {
                 body.width = bw;
                 body.height = bh;
@@ -3115,7 +3121,10 @@
                 // fullscreen immediately, using the activation from this click.
                 var _e0 = null;
                 for (var _k = 0; _k < currentEntries.length; _k++) { if (currentEntries[_k].name === name) { _e0 = currentEntries[_k]; break; } }
-                var url = data.client_url + '?name=' + encodeURIComponent(name) + (_e0 && _e0.fullscreen_on_connect ? '&fs=1' : '');
+                // A new window (⧉) is explicitly windowed: fs=0 tells the
+                // client not to fullscreen-on-connect even if the entry asks.
+                var url = data.client_url + '?name=' + encodeURIComponent(name)
+                    + (newWindow ? '&fs=0' : (_e0 && _e0.fullscreen_on_connect ? '&fs=1' : ''));
                 if (targetWin && !targetWin.closed) targetWin.location.href = url;
                 else window.open(url, '_blank');
             })

@@ -336,7 +336,49 @@
         // already fullscreen, so this page does no fullscreen of its own and
         // just fills the frame; it tells the parent when the session ends).
         var embedded = urlParams.get('embedded') === '1';
+        // ?fs=0: opened by the launcher's "open in a new window" button (⧉).
+        // An explicitly windowed session: no fullscreen-on-connect, whatever
+        // the entry says, so no cover asking for a click.
+        var windowed = urlParams.get('fs') === '0';
         function rgNotifyParent(kind) { if (!embedded) return; try { window.parent.postMessage({ rgSession: kind }, location.origin); } catch (e) {} }
+        // Embedded: the launcher tab is entering fullscreen while this frame
+        // loads, and the viewport jumps to the screen size when that
+        // transition lands — often after the session has connected. Painting
+        // before then shows a fit to the pre-fullscreen viewport that snaps a
+        // moment later. So the connect cover stays up, and the fit-to-window
+        // sends wait, until the parent reports the transition settled (entered
+        // or refused) and the viewport has reached its final size.
+        var viewportSettled = !embedded;
+        var _onViewportSettled = [];
+        function rgWhenViewportSettled(fn) { if (viewportSettled) fn(); else _onViewportSettled.push(fn); }
+        function rgMarkViewportSettled() {
+            if (viewportSettled) return;
+            viewportSettled = true;
+            var fns = _onViewportSettled; _onViewportSettled = [];
+            for (var i = 0; i < fns.length; i++) { try { fns[i](); } catch (e) {} }
+        }
+        if (embedded) {
+            var _vpMatches = function () {
+                return window.screen && screen.width > 0
+                    && Math.abs(window.innerWidth - screen.width) <= 1
+                    && Math.abs(window.innerHeight - screen.height) <= 1;
+            };
+            window.addEventListener('message', function (e) {
+                if (e.origin !== location.origin || !e.data || e.data.rgLauncher !== 'viewport') return;
+                // Refused: the frame fills the tab as it is — settled now.
+                // Entered: the viewport may still be animating to the screen
+                // size; wait for it, capped in case it never matches exactly.
+                if (!e.data.fullscreen || _vpMatches()) { rgMarkViewportSettled(); return; }
+                var vpTimer = null;
+                var onR = function () {
+                    if (!_vpMatches()) return;
+                    window.removeEventListener('resize', onR); clearTimeout(vpTimer);
+                    rgMarkViewportSettled();
+                };
+                window.addEventListener('resize', onR);
+                vpTimer = setTimeout(function () { window.removeEventListener('resize', onR); rgMarkViewportSettled(); }, 1500);
+            });
+        }
         // Populated from /api/sessions/:id when the session is backed by a
         // Connections entry. Used by the Reconnect button to launch a fresh
         // session against the same entry instead of reloading a dead one.
@@ -354,18 +396,29 @@
         // browser honours it there is no click at all; if not, the cover's
         // armed gesture still enters it. Showing the cover now also avoids any
         // flash of the page before the session loads.
+        // Embedded frames show the same cover from the start (no fullscreen
+        // request of their own: the parent tab holds it) and lift it once
+        // connected and the viewport has settled.
+        var _rgEarlyCover = function () {
+            try {
+                var _g = document.getElementById('fs-gate');
+                if (!_g) return;
+                var _t = document.getElementById('fs-gate-title');
+                if (_t) _t.textContent = entryName || 'Session';
+                var _s = document.getElementById('fs-gate-status');
+                if (_s) _s.textContent = 'Connecting…';
+                _g.className = 'visible';
+            } catch (e) {}
+        };
+        if (embedded) {
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _rgEarlyCover);
+            else _rgEarlyCover();
+        }
         if (urlParams.get('fs') === '1' && !embedded) {
             wantFullscreen = true;
             var _rgEarlyFs = function () {
+                _rgEarlyCover();
                 try {
-                    var _g = document.getElementById('fs-gate');
-                    if (_g) {
-                        var _t = document.getElementById('fs-gate-title');
-                        if (_t) _t.textContent = entryName || 'Session';
-                        var _s = document.getElementById('fs-gate-status');
-                        if (_s) _s.textContent = 'Connecting…';
-                        _g.className = 'visible';
-                    }
                     var _el = document.documentElement;
                     var _req = _el.requestFullscreen || _el.webkitRequestFullscreen || _el.mozRequestFullScreen || _el.msRequestFullscreen;
                     if (_req) { var _p = _req.call(_el); if (_p && _p.catch) _p.catch(function () {}); }
@@ -453,7 +506,7 @@
                     };
                 }
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
-                if (session && session.fullscreen_on_connect && !embedded) wantFullscreen = true;
+                if (session && session.fullscreen_on_connect && !embedded && !windowed) wantFullscreen = true;
                 bitmapSession = !!(session && (session.session_type === 'rdp' || session.session_type === 'vnc'));
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 return showBanner(session.banner);
@@ -1767,10 +1820,19 @@
                                     client.sendSize(sw, sh);
                                 }
                             };
-                            setTimeout(fitToWindow, 800);
-                            setTimeout(fitToWindow, 2000);
-                            setTimeout(fitToWindow, 4000);
+                            var scheduleFit = function() {
+                                setTimeout(fitToWindow, 800);
+                                setTimeout(fitToWindow, 2000);
+                                setTimeout(fitToWindow, 4000);
+                            };
+                            // Embedded: not before the viewport has settled,
+                            // or an 800ms send mid-transition would resize
+                            // the remote to a size it is about to leave.
+                            rgWhenViewportSettled(scheduleFit);
                         })();
+                        // Never hold the embedded cover on a parent that does
+                        // not answer (e.g. a stale launcher script).
+                        if (embedded) setTimeout(rgMarkViewportSettled, 3000);
                         // Start thumbnail capture for session owner
                         if (!shareToken && !_thumbInterval) {
                             _thumbInterval = setInterval(captureAndUploadThumbnail, 10000);
@@ -1793,7 +1855,8 @@
                                     rgGateStatus('Connected \u2014 click to enter fullscreen', true);
                             }, 1200);
                         } else if (!wantFullscreen) {
-                            rgHideConnectCover();
+                            // Embedded: reveal only onto the final-size fit.
+                            rgWhenViewportSettled(function() { scaleDisplay(); rgHideConnectCover(); });
                         }
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
@@ -2195,6 +2258,7 @@
                 // rebuild, not just an RDP display update.
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {
+                    if (!viewportSettled) return;   // embedded, mid-transition: the settle fit follows
                     var anyPanelOpen = panelOpen || filePanelOpen;
                     var ts = rgTargetSize(anyPanelOpen);
                     var sw = ts[0], sh = ts[1];
