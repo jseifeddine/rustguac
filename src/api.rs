@@ -2951,6 +2951,7 @@ pub async fn ab_list_all(
                     "path": folder.path,
                     "has_children": folder.has_children,
                     "description": folder.description,
+                    "display_name": folder.display_name,
                     "path_only": true,
                     "entries": [],
                 }));
@@ -2989,6 +2990,7 @@ pub async fn ab_list_all(
             "path": folder.path,
             "has_children": folder.has_children,
             "description": folder.description,
+            "display_name": folder.display_name,
             "allowed_groups": config.as_ref().map(|c| &c.allowed_groups),
             // allowed_users is deliberately not listed: operators see this,
             // and a user who can open a folder should not learn who else can.
@@ -3525,6 +3527,8 @@ pub struct CreateFolderRequest {
     pub allowed_users: Vec<String>,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub display_name: String,
     /// "shared" or "instance" (default: "shared")
     #[serde(default = "default_scope")]
     pub scope: String,
@@ -3645,6 +3649,7 @@ pub async fn ab_create_folder(
         allowed_groups: req.allowed_groups,
         allowed_users,
         description: req.description,
+        display_name: req.display_name.trim().to_string(),
         inherit_from_parent: req.inherit_from_parent,
     };
 
@@ -3691,6 +3696,8 @@ pub struct UpdateFolderRequest {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
     pub inherit_from_parent: bool,
 }
 
@@ -3735,6 +3742,7 @@ pub async fn ab_update_folder(
         allowed_groups: req.allowed_groups,
         allowed_users,
         description: req.description,
+        display_name: req.display_name.trim().to_string(),
         inherit_from_parent: req.inherit_from_parent,
     };
 
@@ -3793,6 +3801,7 @@ pub async fn ab_get_folder_config(
             "allowed_groups": cfg.allowed_groups,
             "allowed_users": cfg.allowed_users,
             "description": cfg.description,
+            "display_name": cfg.display_name,
             "inherit_from_parent": cfg.inherit_from_parent,
         }))
         .into_response(),
