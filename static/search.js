@@ -214,7 +214,7 @@
         shown.forEach(function (m) {
             var r = m.row, e = r.entry;
             var typeLabel = e.session_type.toUpperCase();
-            var typeCls = 'type-' + e.session_type;
+            var typeCls = 'type-' + attr(e.session_type);
             var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
             var connectLabel = needsPrompt ? 'Login…' : 'Connect';
             var userCol = e.session_type === 'proxmox' ? highlight(e.proxmox_token_id || '', tokens) : (e.username ? highlight(e.username, tokens) : '');
