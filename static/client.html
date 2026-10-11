@@ -341,13 +341,13 @@
         // the entry says, so no cover asking for a click.
         var windowed = urlParams.get('fs') === '0';
         function rgNotifyParent(kind) { if (!embedded) return; try { window.parent.postMessage({ rgSession: kind }, location.origin); } catch (e) {} }
-        // Embedded: the launcher tab is entering fullscreen while this frame
-        // loads, and the viewport jumps to the screen size when that
-        // transition lands — often after the session has connected. Painting
-        // before then shows a fit to the pre-fullscreen viewport that snaps a
-        // moment later. So the connect cover stays up, and the fit-to-window
-        // sends wait, until the parent reports the transition settled (entered
-        // or refused) and the viewport has reached its final size.
+        // Embedded: the launcher enters fullscreen, waits for the viewport to
+        // stop changing and creates the session at that measured size, so the
+        // frame paints into exactly the size the remote was given. The connect
+        // cover stays up, and the fit-to-window sends wait, until the launcher
+        // confirms that (its 'viewport' message, sent once this frame reports
+        // ready), so nothing is shown or sent against a viewport that is still
+        // moving.
         var viewportSettled = !embedded;
         var _onViewportSettled = [];
         function rgWhenViewportSettled(fn) { if (viewportSettled) fn(); else _onViewportSettled.push(fn); }
@@ -358,25 +358,9 @@
             for (var i = 0; i < fns.length; i++) { try { fns[i](); } catch (e) {} }
         }
         if (embedded) {
-            var _vpMatches = function () {
-                return window.screen && screen.width > 0
-                    && Math.abs(window.innerWidth - screen.width) <= 1
-                    && Math.abs(window.innerHeight - screen.height) <= 1;
-            };
             window.addEventListener('message', function (e) {
                 if (e.origin !== location.origin || !e.data || e.data.rgLauncher !== 'viewport') return;
-                // Refused: the frame fills the tab as it is — settled now.
-                // Entered: the viewport may still be animating to the screen
-                // size; wait for it, capped in case it never matches exactly.
-                if (!e.data.fullscreen || _vpMatches()) { rgMarkViewportSettled(); return; }
-                var vpTimer = null;
-                var onR = function () {
-                    if (!_vpMatches()) return;
-                    window.removeEventListener('resize', onR); clearTimeout(vpTimer);
-                    rgMarkViewportSettled();
-                };
-                window.addEventListener('resize', onR);
-                vpTimer = setTimeout(function () { window.removeEventListener('resize', onR); rgMarkViewportSettled(); }, 1500);
+                rgMarkViewportSettled();
             });
         }
         // Populated from /api/sessions/:id when the session is backed by a
