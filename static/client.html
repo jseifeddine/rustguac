@@ -79,7 +79,6 @@
             z-index: 3100; /* above the side tabs (3001); hidden before the disconnect overlay (3000) is shown */
             justify-content: center;
             align-items: center;
-            cursor: pointer;
         }
         #fs-gate.visible { display: flex; }
         #fs-gate-box {
@@ -89,21 +88,17 @@
             max-width: 600px;
             padding: 2em 3em;
         }
-        #fs-gate-title { font-size: 1.3em; font-weight: bold; margin-bottom: 0.8em; }
-        #fs-gate-hint { color: var(--text-muted); line-height: 1.6; margin-bottom: 1.2em; }
-        #fs-gate-status { color: var(--text-dim); font-size: 0.9em; margin-bottom: 1.5em; min-height: 1.2em; }
-        #fs-gate-status.connected { color: var(--accent); }
-        #fs-gate-windowed {
-            padding: 0.5em 1.4em;
-            background: var(--input);
-            color: var(--text);
-            border: 1px solid var(--border);
-            font-family: monospace;
-            font-size: 0.9em;
-            border-radius: 4px;
-            cursor: pointer;
+        #fs-gate-spinner {
+            width: 30px; height: 30px; margin: 0 auto 1.2em;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: fs-gate-spin 0.8s linear infinite;
         }
-        #fs-gate-windowed:hover { background: var(--border); }
+        @keyframes fs-gate-spin { to { transform: rotate(360deg); } }
+        #fs-gate-title { font-size: 1.3em; font-weight: bold; margin-bottom: 0.5em; }
+        #fs-gate-status { color: var(--text-dim); font-size: 0.95em; min-height: 1.2em; letter-spacing: 0.02em; }
+        #fs-gate-status.connected { color: var(--accent); }
         #disconnected-overlay {
             display: none;
             position: fixed;
@@ -277,10 +272,9 @@
     <div id="fs-esc-notice"></div>
     <div id="fs-gate">
         <div id="fs-gate-box">
+            <div id="fs-gate-spinner"></div>
             <div id="fs-gate-title"></div>
-            <div id="fs-gate-hint">Click anywhere or press a key to open this session fullscreen.</div>
             <div id="fs-gate-status"></div>
-            <button id="fs-gate-windowed" title="Keep the session in this window">Stay windowed</button>
         </div>
     </div>
     <div id="display"></div>
@@ -1473,36 +1467,26 @@
 
             // ── Fullscreen (#154) ──
             // The browser API requires a fresh user gesture to enter
-            // fullscreen, and navigation from connections.html consumes
-            // the prior gesture. So when the entry is marked
-            // fullscreen-on-connect we don't try to fire on page load.
-            // Instead a gate covers the page while the session connects
-            // underneath it; the gesture that dismisses the gate is the
-            // one that enters fullscreen, so the first picture the user
-            // sees is already the fullscreen one (#257). The gate also
-            // offers to stay windowed. The Ctrl+Alt+Shift menu's
-            // fullscreen button uses its own click gesture and works at
-            // any time once shown.
+            // fullscreen, and navigation from connections.html consumes the
+            // prior gesture, so a fullscreen-on-connect entry can't fire on
+            // load. Instead the next click or key after the session connects
+            // is used (armed in rgArmFullscreenGesture); that press is the
+            // fullscreen gesture, not input for the remote. A cover (#fs-gate)
+            // shows the connection state while the session opens and, later,
+            // hides the one resize fullscreen brings. The session is always
+            // sized to the window, so the first paint fills the viewport with
+            // no scaled-down, letterboxed frame first (#257).
             function rgFullscreenEl() {
                 return document.fullscreenElement
                     || document.webkitFullscreenElement
                     || document.mozFullScreenElement
                     || document.msFullscreenElement || null;
             }
-            // The size the session should be. An RDP/VNC entry that opens
-            // fullscreen on connect is kept at the screen's size even while
-            // the window is still windowed: the gate hides the framebuffer
-            // until the gesture lands, and nothing has to change when it
-            // does. One size from the first request to the fullscreen
-            // desktop, instead of window size, scaled fit, fullscreen size,
-            // refit (#257). A terminal reflows instantly and must stay
-            // crisp, so it keeps the window's size and resizes on fullscreen.
-            // Only until fullscreen has been entered once, or declined at
-            // the gate: after that the user is working windowed, and the
-            // window's size is the right one again.
+            // Always the window: a terminal reflows to it instantly and a
+            // bitmap desktop fills it exactly. When fullscreen is entered the
+            // window grows and this returns the larger size, so the session
+            // resizes once, under the cover.
             function rgTargetSize(anyPanelOpen) {
-                if (wantFullscreen && bitmapSession && !fsEverEntered && !rgFullscreenEl() && window.screen && screen.width > 0 && screen.height > 0)
-                    return [screen.width, screen.height];
                 return [anyPanelOpen ? window.innerWidth - 380 : window.innerWidth, window.innerHeight];
             }
             function rgEnterFullscreen() {
@@ -1511,9 +1495,9 @@
                     || el.webkitRequestFullscreen
                     || el.mozRequestFullScreen
                     || el.msRequestFullscreen;
-                if (!req) return;
+                if (!req) { rgHideConnectCover(); return; }
                 var p;
-                try { p = req.call(el); } catch (e) { return; }
+                try { p = req.call(el); } catch (e) { rgHideConnectCover(); return; }
                 var onOk = function() {
                     if (navigator.keyboard && navigator.keyboard.lock) {
                         navigator.keyboard.lock(['Escape']).catch(rgShowEscNoticeOnce);
@@ -1521,7 +1505,9 @@
                         rgShowEscNoticeOnce();
                     }
                 };
-                if (p && p.then) p.then(onOk).catch(function(){ if (fsGateActive) rgStayWindowed(); }); else onOk();
+                // If the request is refused, drop the cover so the windowed
+                // session is visible rather than hidden behind it.
+                if (p && p.then) p.then(onOk).catch(function(){ rgHideConnectCover(); }); else onOk();
             }
             function rgExitFullscreen() {
                 try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); } catch (e) {}
@@ -1531,87 +1517,64 @@
                     || document.msExitFullscreen;
                 if (x) { try { x.call(document); } catch (e) {} }
             }
+            var fsGestureArmed = false;
+            var fsCoverTimer = null;
+            // Arm the first click/key after CONNECTED as the fullscreen
+            // gesture. It is taken in the capture phase on window so it never
+            // reaches the display (an unreleased press guacd saw would turn
+            // every later move into a drag selection, #256). Entering
+            // fullscreen brings the cover back to hide the resize.
             function rgArmFullscreenGesture() {
+                if (fsGestureArmed) return;
+                fsGestureArmed = true;
                 var fire = function(e) {
-                    document.removeEventListener('mousedown', fire, true);
-                    document.removeEventListener('keydown', fire, true);
-                    // This press is the browser's fullscreen gesture, not
-                    // input for the remote. The transition it starts re-lays
-                    // out the display and swallows the matching release, and
-                    // a press guacd never sees released turns every later
-                    // pointer move into a drag selection (#256). Keep it from
-                    // the display's handlers; rgReleaseAllInput() covers a
-                    // release lost for any other reason once fullscreen lands.
+                    if (e.type === 'keydown' && (e.key === 'Escape' || e.key === 'Tab')) return;
+                    rgDisarmFullscreenGesture();
                     e.stopPropagation();
                     e.preventDefault();
+                    rgShowConnectCover('Entering fullscreen…', true);
                     rgEnterFullscreen();
+                    // Fallback: if no resize arrives (window already screen
+                    // size, or the request was ignored), reveal anyway.
+                    if (fsCoverTimer) clearTimeout(fsCoverTimer);
+                    fsCoverTimer = setTimeout(rgHideConnectCover, 1600);
                 };
-                document.addEventListener('mousedown', fire, true);
-                document.addEventListener('keydown', fire, true);
+                window.addEventListener('mousedown', fire, true);
+                window.addEventListener('keydown', fire, true);
+                rgArmFullscreenGesture._fire = fire;
             }
-            // The gate (#257): shown before the tunnel opens when the entry
-            // is fullscreen-on-connect. The session connects and paints
-            // behind it at the size it will have in fullscreen, so when the
-            // gesture lands the desktop is already there, 1:1, with no
-            // resize round trip and no scaled-down frame with a gap first.
-            // Listeners sit on window in the capture phase so the gesture
-            // never reaches the remote as input. Escape, the button, a
-            // rejected fullscreen request, or a gesture the browser does
-            // not honour within a moment all fall back to the window.
-            var fsGateActive = false;
-            var fsGateTimer = null;
+            function rgDisarmFullscreenGesture() {
+                if (!fsGestureArmed) return;
+                fsGestureArmed = false;
+                var fire = rgArmFullscreenGesture._fire;
+                if (fire) {
+                    window.removeEventListener('mousedown', fire, true);
+                    window.removeEventListener('keydown', fire, true);
+                }
+            }
+            // The connect cover (#fs-gate): a plain opaque panel with the
+            // entry name and a status line. It hides the brief black frame
+            // while the tunnel opens and, on the fullscreen gesture, the one
+            // resize into fullscreen. It is informational only — no button,
+            // no "click to proceed"; the session is revealed automatically.
             function rgGateStatus(text, connected) {
                 var el = document.getElementById('fs-gate-status');
                 if (!el) return;
                 el.textContent = text;
                 el.className = connected ? 'connected' : '';
             }
-            function rgHideFullscreenGate() {
-                if (!fsGateActive) return;
-                fsGateActive = false;
-                if (fsGateTimer) { clearTimeout(fsGateTimer); fsGateTimer = null; }
-                window.removeEventListener('mousedown', rgGateFire, true);
-                window.removeEventListener('keydown', rgGateFire, true);
+            function rgShowConnectCover(status, connected) {
                 var g = document.getElementById('fs-gate');
-                if (g) g.className = '';
-            }
-            function rgStayWindowed() {
-                // The window is the session's size from here on.
-                wantFullscreen = false;
-                rgHideFullscreenGate();
-                var ts = rgTargetSize(panelOpen || filePanelOpen);
-                if (sizeWouldChange(ts[0], ts[1])) client.sendSize(ts[0], ts[1]);
-                scaleDisplay();
-            }
-            function rgGateFire(e) {
-                if (!fsGateActive) return;
-                if (e.type === 'keydown' && e.key === 'Escape') {
-                    e.preventDefault(); e.stopPropagation();
-                    rgStayWindowed();
-                    return;
-                }
-                if (e.type === 'mousedown' && e.target && e.target.id === 'fs-gate-windowed') return;
-                e.preventDefault(); e.stopPropagation();
-                rgEnterFullscreen();
-                if (fsGateTimer) clearTimeout(fsGateTimer);
-                fsGateTimer = setTimeout(function() {
-                    fsGateTimer = null;
-                    if (fsGateActive && !rgFullscreenEl()) rgStayWindowed();
-                }, 1500);
-            }
-            function rgShowFullscreenGate() {
-                if (fsGateActive || rgFullscreenEl()) return;
-                fsGateActive = true;
+                if (!g) return;
                 document.getElementById('fs-gate-title').textContent =
                     entryDisplayName || ('Session ' + sessionId.substring(0,8));
-                rgGateStatus('Connecting...', false);
-                document.getElementById('fs-gate').className = 'visible';
-                window.addEventListener('mousedown', rgGateFire, true);
-                window.addEventListener('keydown', rgGateFire, true);
-                document.getElementById('fs-gate-windowed').addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    rgStayWindowed();
-                });
+                rgGateStatus(status || 'Connecting…', !!connected);
+                g.className = 'visible';
+            }
+            function rgHideConnectCover() {
+                if (fsCoverTimer) { clearTimeout(fsCoverTimer); fsCoverTimer = null; }
+                var g = document.getElementById('fs-gate');
+                if (g) g.className = '';
             }
             // Tell the remote that nothing is held: every key the keyboard
             // tracks as down, and all mouse buttons at the last pointer
@@ -1679,7 +1642,7 @@
             function rgOnFullscreenChange() {
                 var inFs = !!rgFullscreenEl();
                 var bar = document.getElementById('fs-bar');
-                if (inFs) { fsEverEntered = true; rgReleaseAllInput(); rgHideFullscreenGate(); }
+                if (inFs) { fsEverEntered = true; rgReleaseAllInput(); } else { rgHideConnectCover(); }
                 if (bar) {
                     if (inFs) {
                         bar.classList.add('visible');
@@ -1757,7 +1720,19 @@
                         }
                         document.getElementById('fs-bar-title').textContent =
                             entryDisplayName || ('Session ' + sessionId.substring(0,8));
-                        if (wantFullscreen && !fsGateActive && !rgFullscreenEl()) rgArmFullscreenGesture();
+                        // Connected: the session now fills the window behind
+                        // the cover. Arm the next click/key as the fullscreen
+                        // gesture, and lift the cover shortly so the filled
+                        // window shows if the user doesn't go fullscreen
+                        // straight away (the gesture puts a cover back for the
+                        // resize). No prompt, no button — this is automatic.
+                        if (wantFullscreen && !rgFullscreenEl()) {
+                            rgArmFullscreenGesture();
+                            if (fsCoverTimer) clearTimeout(fsCoverTimer);
+                            fsCoverTimer = setTimeout(rgHideConnectCover, 500);
+                        } else {
+                            rgHideConnectCover();
+                        }
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
                         statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
@@ -1770,7 +1745,7 @@
                         break;
                     case Guacamole.Client.State.DISCONNECTED:
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
-                        rgHideFullscreenGate();
+                        rgDisarmFullscreenGesture(); rgHideConnectCover();
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         document.getElementById('disconnected-overlay').className = 'visible';
                         if (rgFullscreenEl()) rgExitFullscreen();
@@ -1784,7 +1759,7 @@
             client.onerror = function(status) {
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
-                rgHideFullscreenGate();
+                rgDisarmFullscreenGesture(); rgHideConnectCover();
                 // Stop the 10s thumbnail uploader; the session is dead and
                 // each XHR would otherwise 404 against a cleaned-up id.
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
@@ -2131,7 +2106,11 @@
                 applyRemoteCursor();
             }
 
-            client.getDisplay().onresize = function() { scaleDisplay(); };
+            client.getDisplay().onresize = function() {
+                scaleDisplay();
+                // The one resize into fullscreen has landed: lift the cover.
+                if (rgFullscreenEl()) rgHideConnectCover();
+            };
             var resizeTimer = null;
             window.addEventListener('resize', function() {
                 scaleDisplay();
@@ -2148,7 +2127,7 @@
                 }, 500);
             });
 
-            if (wantFullscreen) rgShowFullscreenGate();
+            if (wantFullscreen) rgShowConnectCover('Connecting\u2026', false);
             var connectData = shareToken ? 'token=' + encodeURIComponent(shareToken) : '';
             client.connect(connectData);
         }
