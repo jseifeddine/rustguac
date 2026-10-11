@@ -3074,6 +3074,14 @@ pub async fn ab_search_index(
             .await
             .ok()
             .flatten();
+        // The folder's human title (e.g. the NetBox tenant name), so the
+        // search results can show it over the folder key like the folder view.
+        let folder_display = vault
+            .get_folder_config(&scope, &path)
+            .await
+            .ok()
+            .map(|c| c.display_name)
+            .filter(|s| !s.is_empty());
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
                 let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
@@ -3081,6 +3089,7 @@ pub async fn ab_search_index(
                 emitted.push(json!({
                     "scope": scope,
                     "folder_path": path,
+                    "folder_display_name": folder_display,
                     "entry": info,
                 }));
             }
