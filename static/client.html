@@ -1885,11 +1885,19 @@
             // the strip is not. A larger gap is a real aspect mismatch (fixed
             // resolution, no resize support) and keeps the letterbox.
             var FILL_MAX = 1.025;
-            function applyFill(el, w, h, availW, availH) {
+            // pixelExact: the picture is already drawn one framebuffer pixel per
+            // physical pixel (effective scale x devicePixelRatio == 1), so any
+            // stretch would be visibly soft. Then we never stretch — the small
+            // mod-16 margin is centred and shows the dark background instead
+            // (#251). When the picture is already being resampled, the stretch
+            // costs no extra sharpness, so we take it to fill the gap.
+            function applyFill(el, w, h, availW, availH, pixelExact) {
                 fillX = 1;
                 fillY = 1;
-                if (w > 0 && w < availW && availW / w <= FILL_MAX) fillX = availW / w;
-                if (h > 0 && h < availH && availH / h <= FILL_MAX) fillY = availH / h;
+                if (!pixelExact) {
+                    if (w > 0 && w < availW && availW / w <= FILL_MAX) fillX = availW / w;
+                    if (h > 0 && h < availH && availH / h <= FILL_MAX) fillY = availH / h;
+                }
                 if (fillX !== 1 || fillY !== 1) {
                     el.style.transformOrigin = '0 0';
                     el.style.transform = 'scale(' + fillX + ', ' + fillY + ')';
@@ -1980,18 +1988,27 @@
                 }
                 else {
                     // Single display: scale the whole framebuffer to fit.
-                    display.scale(Math.min(availW / dw, availH / dh));
-                    applyFill(el, dw * display.getScale(), dh * display.getScale(), availW, availH);
+                    var scale = Math.min(availW / dw, availH / dh);
+                    display.scale(scale);
+                    var sw = dw * scale, sh = dh * scale;
+                    var pixelExact = Math.abs(scale * (window.devicePixelRatio || 1) - 1) < 0.002;
+                    applyFill(el, sw, sh, availW, availH, pixelExact);
                     displayEl.style.overflow = '';
                     displayEl.style.position = '';
                     displayEl.style.width = '';
                     displayEl.style.height = '';
                     displayEl.style.top = '';
                     displayEl.style.left = '';
-                    el.style.marginLeft = '';
-                    el.style.marginTop = '';
-                    // Offset display to the right when left panel is open
-                    displayEl.style.marginLeft = anyPanelOpen ? '380px' : '0';
+                    displayEl.style.marginLeft = '0';
+                    // Centre the (possibly stretched) framebuffer in the
+                    // available area so any residual mod-16 margin is split
+                    // evenly and shows the dark page background, instead of a
+                    // bare strip on one edge (#251). offsetLeft includes these
+                    // margins and ignores the fill transform, so the pointer
+                    // maths (which divides out fillX/fillY) stays correct.
+                    var fw = sw * fillX, fh = sh * fillY;
+                    el.style.marginLeft = (panelOffset + Math.max(0, (availW - fw) / 2)) + 'px';
+                    el.style.marginTop = Math.max(0, (availH - fh) / 2) + 'px';
                 }
                 applyRemoteCursor();
             }
