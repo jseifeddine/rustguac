@@ -83,6 +83,9 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      - name: Client fit maths
+        run: node tests/client-fit.mjs
+
       - name: End-to-end tests
         # The real static pages against a stubbed API: see tests/e2e/README.md.
         working-directory: tests/e2e
