@@ -5,17 +5,6 @@
     <title>rustguac - Reports</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
-        .filter-bar {
-            display: flex;
-            align-items: center;
-            gap: var(--s-3);
-            margin: var(--s-3) 0 var(--s-2) 0;
-            flex-wrap: wrap;
-        }
-        .filter-bar input {
-            width: 360px;
-            max-width: 100%;
-        }
         th.sortable { cursor: pointer; user-select: none; }
         th.sortable:hover { color: var(--text); }
         th .sort-arrow { font-size: 0.7em; margin-left: var(--s-1); }
@@ -70,6 +59,7 @@
             .btn-small { padding: 0 var(--s-1); }
         }
     </style>
+    <script src="/filters.js"></script>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
@@ -85,11 +75,9 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
         <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
+        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
-
-    <h2>Reports</h2>
 
     <div class="summary-cards" id="summary-cards">
         <div class="summary-card">
@@ -112,9 +100,10 @@
 
     <div style="margin-top:2em">
         <h2>Session History</h2>
-        <div class="filter-bar">
-            <input type="text" id="filter-input" placeholder="Filter sessions...">
-            <button id="export-csv-btn" class="btn-add">Export CSV</button>
+        <div class="list-tools">
+            <input type="text" id="filter-input" class="list-search" placeholder="Search session history (user, host, folder&#8230;)">
+            <div id="history-filters"></div>
+            <button id="export-csv-btn" class="btn-add list-action">Export CSV</button>
         </div>
         <table id="history-table">
             <thead>
@@ -215,6 +204,13 @@
             return h;
         }
 
+        // "host (Tenant)" display names, as the NetBox sync writes them, read
+        // as the host over a quieter tenant line (same as Connections).
+        function entryNameHtml(label) {
+            var m = /^(.*\S)\s+\(([^()]+)\)$/.exec(label || '');
+            if (!m) return escapeHtml(label || '');
+            return '<span class="entry-name">' + escapeHtml(m[1]) + '</span><span class="entry-sub">' + escapeHtml(m[2]) + '</span>';
+        }
         function escapeHtml(s) {
             if (!s) return '';
             var d = document.createElement('div');
@@ -319,7 +315,9 @@
                 return 0;
             });
 
-            // Apply text filter
+            // Facet filters (filters.js), then the text filter
+            historyFilters.update(sessionsData);
+            sorted = historyFilters.apply(sorted);
             var filterText = (document.getElementById('filter-input').value || '').toLowerCase();
             if (filterText) {
                 sorted = sorted.filter(function(s) {
@@ -350,7 +348,7 @@
                 }
                 html += '<tr>' +
                     '<td>' + escapeHtml(s.created_by || s.username || '') + '</td>' +
-                    '<td>' + escapeHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
+                    '<td>' + entryNameHtml(s.entry_display_name || s.address_book_entry || '') + '</td>' +
                     '<td>' + escapeHtml(s.address_book_folder || '') + '</td>' +
                     '<td>' + typeBadge(s.session_type) + '</td>' +
                     '<td>' + escapeHtml(s.hostname || '') + '</td>' +
@@ -415,6 +413,19 @@
         document.getElementById('filter-input').addEventListener('input', function() {
             applySortAndRender();
         });
+        // Shared facet filters (filters.js): Type, Folder, User, Status.
+        // Selections persist in sessionStorage for this tab.
+        var historyFilters = rgFilters.create({
+            mount: document.getElementById('history-filters'),
+            id: 'reports',
+            facets: [
+                { key: 'type', label: 'Type', value: function(s) { return s.session_type; }, render: typeBadge },
+                { key: 'folder', label: 'Folder', value: function(s) { return s.address_book_folder; } },
+                { key: 'user', label: 'User', value: function(s) { return s.created_by; } },
+                { key: 'status', label: 'Status', value: function(s) { return s.status; } }
+            ],
+            onChange: function() { applySortAndRender(); }
+        });
 
         // ── Export CSV ──
         document.getElementById('export-csv-btn').addEventListener('click', function() {
@@ -446,7 +457,7 @@
                 var html = '';
                 data.forEach(function(c) {
                     html += '<tr>' +
-                        '<td>' + escapeHtml(c.name || c.address_book_entry || '') + '</td>' +
+                        '<td>' + entryNameHtml(c.name || c.address_book_entry || '') + '</td>' +
                         '<td>' + typeBadge(c.session_type) + '</td>' +
                         '<td>' + (c.session_count || 0) + '</td>' +
                         '<td>' + (c.total_hours != null ? c.total_hours.toFixed(1) : '0') + '</td>' +

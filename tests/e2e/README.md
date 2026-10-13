@@ -27,6 +27,7 @@ One spec per change, named after the branch that introduced it:
 | `connections-app-shell` | #254: clipped body, two scroll panes, folder change scrolls the pane not the page |
 | `role-nav` | one nav on every page, gated by `data-role-level` |
 | `sessions-adhoc-modal` | ad-hoc form opens as a modal |
+| `facet-filters` | shared facets narrow lists, persist, combine with search |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.

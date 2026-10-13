@@ -125,6 +125,7 @@
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules (same as client.html) -->
+    <script src="/filters.js"></script>
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
     <script src="/guac/Display.js"></script>
@@ -174,11 +175,9 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
         <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
+        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
-
-    <h2>Recordings</h2>
 
     <div id="player-section">
         <div id="player-header">
@@ -197,7 +196,10 @@
     </div>
 
     <div style="max-width:1200px;margin-bottom:1em">
-        <input type="text" id="rec-search" placeholder="Search recordings (user, entry, folder...)" style="width:100%;padding:0.5em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;box-sizing:border-box">
+        <div class="list-tools">
+            <input type="text" id="rec-search" placeholder="Search recordings (user, entry, folder&#8230;)" class="list-search">
+            <div id="rec-filters"></div>
+        </div>
     </div>
     <div id="recording-list"></div>
     <div id="rec-pagination" style="max-width:1200px;margin-top:0.8em;font-family:monospace;font-size:0.9em"></div>
@@ -373,9 +375,24 @@
         function recSearchQuery() {
             return (document.getElementById('rec-search').value || '').toLowerCase();
         }
+        // Shared facet filters (filters.js): Type, Folder, User; applied on top
+        // of the text search. Selections persist in sessionStorage for this tab.
+        var recFilters = rgFilters.create({
+            mount: document.getElementById('rec-filters'),
+            id: 'recordings',
+            facets: [
+                { key: 'type', label: 'Type', value: function(r) { return r.session_type; },
+                  render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } },
+                { key: 'folder', label: 'Folder', value: function(r) { return r.folder; } },
+                { key: 'user', label: 'User', value: function(r) { return r.user; } }
+            ],
+            onChange: function() { recPage = 1; renderRecordings(filterRecordings(recSearchQuery())); }
+        });
         function filterRecordings(q) {
-            if (!q) return allRecordings;
-            return allRecordings.filter(function(r) {
+            recFilters.update(allRecordings);
+            var list = recFilters.apply(allRecordings);
+            if (!q) return list;
+            return list.filter(function(r) {
                 return (r.name || '').toLowerCase().indexOf(q) >= 0 ||
                        (r.user || '').toLowerCase().indexOf(q) >= 0 ||
                        (r.entry_display_name || '').toLowerCase().indexOf(q) >= 0 ||
@@ -453,7 +470,7 @@
             slice.forEach(function(r) {
                 var date = r.modified ? new Date(r.modified).toLocaleString() : (r.created_at ? new Date(r.created_at).toLocaleString() : '');
                 var entryName = r.entry_display_name || r.address_book_entry || r.name;
-                var typeBadge = r.session_type ? '<span style="color:var(--type-' + r.session_type + '-fg)">' + r.session_type + '</span>' : '';
+                var typeBadge = r.session_type ? '<span class="type-badge type-' + escapeAttr(r.session_type) + '">' + escapeHtml(r.session_type) + '</span>' : '';
                 html += '<tr>' +
                     '<td title="' + escapeAttr(r.name) + '">' + entryNameHtml(entryName) + '</td>' +
                     '<td>' + escapeHtml(r.user || '') + '</td>' +

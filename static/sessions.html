@@ -64,7 +64,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
         <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
+        <a href="/connections.html#my-credentials" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
@@ -188,12 +188,12 @@
     </div>
 
     <div id="sessions">
-        <div class="section-head">
-            <strong>Sessions</strong>
-            <span class="section-count" id="session-counts"></span>
-            <button type="button" class="btn-add section-action" id="new-session-btn" style="display:none" title="Start a one-off session to any host. Nothing is saved.">&#9889; New ad-hoc session</button>
+        <div class="list-tools">
+            <input type="text" id="session-search" class="list-search" placeholder="Search sessions (user, host, owner, ID&#8230;)">
+            <div id="session-filters"></div>
+            <button type="button" class="btn-add list-action" id="new-session-btn" style="display:none" title="Start a one-off session to any host. Nothing is saved.">&#9889; New ad-hoc session</button>
         </div>
-        <div id="session-filters" class="list-tools"></div>
+        <span class="section-count" id="session-counts" style="display:none"></span>
         <table>
             <thead><tr>
                 <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
@@ -203,6 +203,7 @@
         <p id="session-empty" class="empty" style="display:none"></p>
     </div>
 
+    <script src="/filters.js"></script>
     <script>
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='aurora';
@@ -617,6 +618,48 @@
                 return res.json();
             })
             .then(function(sessions) {
+                lastSessionList = sessions;
+                renderSessionList(sessions);
+            });
+        }
+
+        // Shared facet filters (filters.js): Type, Status, Owner. Selections
+        // persist in sessionStorage for this tab. Counts in the header stay
+        // for the full list; the table shows the filtered one.
+        var lastSessionList = null;
+        var sessionFilters = rgFilters.create({
+            mount: document.getElementById('session-filters'),
+            id: 'sessions',
+            facets: [
+                { key: 'type', label: 'Type', value: function(s) { return s.session_type; },
+                  render: function(v) { return '<span class="type-badge type-' + v.replace(/[^a-z0-9-]/gi, '') + '">' + v.replace(/[<>&]/g, '') + '</span>'; } },
+                { key: 'user', label: 'User', value: function(s) { return s.username; } },
+                { key: 'owner', label: 'Owner', value: function(s) { return s.created_by; } },
+                { key: 'status', label: 'Status', value: function(s) { return s.status; } }
+            ],
+            onChange: function() { if (lastSessionList) renderSessionList(lastSessionList); }
+        });
+        function sessionSearchQuery() {
+            return (document.getElementById('session-search').value || '').toLowerCase();
+        }
+        document.getElementById('session-search').addEventListener('input', function() {
+            if (lastSessionList) renderSessionList(lastSessionList);
+        });
+
+        function renderSessionList(allSessions) {
+                sessionFilters.update(allSessions);
+                var sessions = sessionFilters.apply(allSessions);
+                var q = sessionSearchQuery();
+                if (q) {
+                    sessions = sessions.filter(function(s) {
+                        var host = (s.session_type === 'web' ? s.url : s.hostname) || '';
+                        return (s.username || '').toLowerCase().indexOf(q) >= 0
+                            || host.toLowerCase().indexOf(q) >= 0
+                            || (s.created_by || '').toLowerCase().indexOf(q) >= 0
+                            || (s.session_id || '').toLowerCase().indexOf(q) >= 0
+                            || (s.session_type || '').toLowerCase().indexOf(q) >= 0;
+                    });
+                }
                 var tbody = document.getElementById('session-list');
                 var empty = document.getElementById('session-empty');
                 var counts = document.getElementById('session-counts');
@@ -642,7 +685,9 @@
                     tdId.appendChild(idLink);
                     tr.appendChild(tdId);
 
-                    tr.appendChild(h('td', s.session_type));
+                    var tdType = document.createElement('td');
+                    tdType.appendChild(h('span', s.session_type, { 'class': 'type-badge type-' + s.session_type }));
+                    tr.appendChild(tdType);
                     tr.appendChild(h('td', hostCol));
                     tr.appendChild(h('td', s.username));
                     tr.appendChild(h('td', s.created_by || '', { 'class': isOwn ? 'owner-self' : 'owner-other' }));
@@ -683,21 +728,31 @@
 
                 // Count indicator: "12 active · 3 yours" for admins seeing others,
                 // "3 active" when caller only sees their own.
-                if (activeCount === 0) {
+                if (sessions.length === 0 && allSessions.length > 0) {
+                    empty.style.display = '';
+                    empty.textContent = 'No sessions match the current filters.';
+                } else if (activeCount === 0) {
                     empty.style.display = '';
                     empty.textContent = myRole === 'admin'
                         ? 'No active sessions.'
                         : 'No active sessions. Use Connections to connect to a saved entry, or the form above to start an ad-hoc session.';
-                    counts.textContent = '';
                 } else {
                     empty.style.display = 'none';
-                    if (myRole === 'admin' && activeCount !== ownActiveCount) {
-                        counts.textContent = activeCount + ' active · ' + ownActiveCount + ' yours';
-                    } else {
-                        counts.textContent = activeCount + ' active';
-                    }
                 }
-            });
+                // Header counts describe the whole list, not the filtered view.
+                var totalActive = 0, ownActive = 0;
+                allSessions.forEach(function(s) {
+                    if (s.status !== 'active') return;
+                    totalActive++;
+                    if (myName && s.created_by === myName) ownActive++;
+                });
+                if (totalActive === 0) {
+                    counts.textContent = '';
+                } else if (myRole === 'admin' && totalActive !== ownActive) {
+                    counts.textContent = totalActive + ' active · ' + ownActive + ' yours' + (sessionFilters.active() ? ' · ' + sessions.length + ' shown' : '');
+                } else {
+                    counts.textContent = totalActive + ' active' + (sessionFilters.active() ? ' · ' + sessions.length + ' shown' : '');
+                }
         }
 
         document.getElementById('session-list').addEventListener('click', function(e) {

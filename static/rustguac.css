@@ -93,6 +93,8 @@ nav a {
     line-height: 1.4;
 }
 nav a:hover { color: var(--text); text-decoration: none; }
+/* The key glyph before Credentials renders as a large colour emoji; keep it to text height. */
+nav .nav-key { font-size: 0.75em; vertical-align: 0.05em; margin-right: 0.1em; }
 nav a.active { color: var(--primary); font-weight: bold; }
 nav a.active::after {
     content: '';
@@ -353,12 +355,14 @@ tbody tr:last-child td { border-bottom: none; }
 .type-vnc { background: var(--type-vnc-bg); color: var(--type-vnc-fg); }
 .type-web { background: var(--type-web-bg); color: var(--type-web-fg); }
 .type-vdi { background: var(--type-vdi-bg); color: var(--type-vdi-fg); }
+.type-proxmox { background: #e57000; color: #000; }
 
 /* ── Section heading strip (used above grids/lists) ──────── */
 .section-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--s-2);
+    min-height: var(--ctl-sm);
     margin-bottom: var(--s-3);
     padding-bottom: var(--s-2);
     border-bottom: 1px solid var(--border);
@@ -870,3 +874,139 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
    "host (Tenant)" display names read as the host over a quieter subline. */
 .entry-name { display: block; color: var(--text); }
 .entry-sub { display: block; font-size: var(--fz-xs); color: var(--text-dim); margin-top: 1px; letter-spacing: 0.02em; }
+
+/* ── Facet filters (filters.js) ──────────────────────────── */
+.rg-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-2);
+}
+.rg-filters-label {
+    color: var(--text-muted);
+    font-size: var(--fz-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+.rg-facet { position: relative; }
+.rg-facet[hidden] { display: none; }
+.rg-facet-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    height: var(--ctl-sm);
+    padding: 0 var(--s-2);
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: var(--fz-sm);
+    cursor: pointer;
+    white-space: nowrap;
+}
+/* The generic button:hover paints the primary colour; these stay on the input tone. */
+.rg-facet-btn:hover, .rg-facet-btn:focus, .rg-facet.open .rg-facet-btn { background: var(--input); border-color: var(--accent); color: var(--text); }
+.rg-facet-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rg-facet.active .rg-facet-btn { border-color: var(--accent); color: var(--accent); }
+.rg-facet.active .rg-facet-btn:hover, .rg-facet.active .rg-facet-btn:focus { color: var(--accent); }
+.rg-facet-n {
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 999px;
+    padding: 0 0.55em;
+    font-size: var(--fz-xs);
+    font-weight: bold;
+    line-height: 1.6;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rg-facet-n.one { background: transparent; color: var(--accent); padding: 0; font-weight: normal; font-size: var(--fz-sm); }
+.rg-facet-n.one::before { content: "\00b7\00a0"; color: var(--text-dim); }
+.rg-facet-n[hidden] { display: none; }
+.rg-facet-caret { font-size: 0.7em; opacity: 0.6; margin-left: 1px; }
+.rg-facet.open .rg-facet-caret { transform: rotate(180deg); }
+.rg-facet-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 600;
+    min-width: 260px;
+    max-width: min(440px, calc(100vw - 32px));
+    padding: var(--s-2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.rg-facet-menu.right { left: auto; right: 0; }
+.rg-facet-menu[hidden] { display: none; }
+.rg-facet-tools-row { display: flex; align-items: center; gap: var(--s-1); margin-bottom: var(--s-2); }
+.rg-facet-tools { flex: 1; min-width: 0; display: flex; }
+.rg-facet-tools input[type="search"] { flex: 1; min-width: 0; height: var(--ctl-sm); font-size: var(--fz-sm); }
+.rg-facet-tool {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: var(--fz-xs);
+    height: var(--ctl-sm);
+    padding: 0 var(--s-2);
+    cursor: pointer;
+}
+.rg-facet-tool:hover, .rg-facet-tool:focus { background: transparent; color: var(--accent); border-color: var(--border); }
+.rg-facet-list { max-height: 340px; overflow-y: auto; overflow-x: hidden; padding-right: var(--s-2); scrollbar-gutter: stable; }
+.rg-facet-opt {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin: 0;
+    padding: 4px var(--s-1);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: var(--fz-sm);
+    font-weight: normal;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+}
+.rg-facet-opt:hover { background: var(--input); }
+.rg-facet-opt.zero { opacity: 0.55; }
+.rg-facet-opt input[type="checkbox"] { margin: 0; flex: none; accent-color: var(--accent); width: 15px; height: 15px; }
+.rg-facet-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-facet-val .type-badge { font-size: var(--fz-xs); min-width: 44px; padding: 1px var(--s-2); }
+.rg-facet-count { color: var(--text-dim); font-size: var(--fz-xs); flex: none; }
+.rg-facet-empty { color: var(--text-dim); font-size: var(--fz-sm); padding: var(--s-2) var(--s-1); }
+.rg-filters-clear {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: var(--fz-sm);
+    height: var(--ctl-sm);
+    padding: 0 var(--s-2);
+    cursor: pointer;
+}
+.rg-filters-clear:hover, .rg-filters-clear:focus { background: transparent; color: var(--primary); border-color: var(--border); }
+.rg-filters-clear[hidden] { display: none; }
+
+/* ── List tool rows (search box + facet filters above a table) ── */
+.list-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+}
+.list-tools:empty { display: none; }
+.list-tools .list-search { flex: 1 1 260px; min-width: 200px; max-width: 520px; height: var(--ctl-sm); font-size: var(--fz-sm); }
+/* A page-specific action (New ad-hoc session, Export CSV) pinned to the right
+   of the shared search+filters row. */
+.list-tools .list-action { margin-left: auto; }
+
+/* ── Modal extras ─────────────────────────────────────── */
+.modal .modal-hint { color: var(--text-muted); font-size: var(--fz-sm); margin: 0 0 var(--s-3); }
+.modal.adhoc-modal { min-width: 520px; max-width: 640px; }

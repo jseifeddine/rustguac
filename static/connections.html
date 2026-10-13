@@ -216,8 +216,6 @@
             display: flex; gap: var(--s-1); align-items: center;
         }
         .session-card-info .card-meta .type-badge { font-size: 10px; min-width: 36px; }
-        /* Proxmox VE brand orange badge */
-        .type-badge.type-proxmox { background: #e57000; color: #000; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
         .session-card.dormant { opacity: 0.75; }
         .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
         .card-actions {
@@ -561,6 +559,18 @@
             background: rgba(255,255,255,0.015);
         }
         .main { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--s-2); }
+        /* The folder header (name, description, search, actions, filters)
+           pins to the top of the entries pane, so it stays under the nav and
+           the active-sessions strip while a long table scrolls beneath it. */
+        #entries-header {
+            position: sticky; top: 0; z-index: 30;
+            background: var(--bg);
+            padding-bottom: var(--s-2);
+            margin-bottom: var(--s-2);
+            box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.6);
+        }
+        #entries-header .folder-actions { margin-bottom: 0; }
+        #entries-header #entries-filters { margin: var(--s-2) 0 0 0; }
 
         /* Sidebar panel: one pinned header band (label, new-folder button,
            filter) on a surface tone, then the list with hairline dividers.
@@ -611,7 +621,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" data-min-role="operator">Tokens</a>
         <a href="/admin.html" id="admin-link" data-min-role="admin">Admin</a>
-        <a href="#" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
+        <a href="#" id="my-creds-nav" title="Manage your saved credential variables"><span class="nav-key">&#128273;</span> Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
             <span id="user-menu-btn" title="Preferences">&#9881; Settings</span>
@@ -681,6 +691,7 @@
                         <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
                         <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
                     </div>
+                    <div id="entries-filters" class="list-tools"></div>
                 </div>
                 <div id="entries-content">
                     <p class="empty">Select a folder to view entries.</p>
@@ -1334,7 +1345,8 @@
         </div>
     </div>
 
-    <script>
+<script src="/filters.js"></script>
+        <script>
         function togglePw(btn){var inp=btn.previousElementSibling;if(inp.type==='password'){inp.type='text';btn.textContent='\u25CB'}else{inp.type='password';btn.textContent='\u25CF'}}
         function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
         var _themePresets={},_adminPreset='aurora';
@@ -2400,10 +2412,15 @@
             bulkSel.names.clear();
             updateBulkBar();
             var content = document.getElementById('entries-content');
+            entryFilters.show('folder', true);
+            entryFilters.update(matches.map(function(m) { return m.row; }));
+            var allMatches = matches;
+            matches = matches.filter(function(m) { return entryFilters.apply([m.row]).length > 0; });
             if (matches.length === 0) {
                 content.innerHTML = '<div class="empty-state" style="padding:2em;margin:1em 0">' +
-                    '<p style="color:var(--text-dim);margin:0">No matches for ' + escapeHtml(query) + '</p>' +
-                    '</div>';
+                    '<p style="color:var(--text-dim);margin:0">' +
+                    (allMatches.length ? 'No matches for ' + escapeHtml(query) + ' with the current filters' : 'No matches for ' + escapeHtml(query)) +
+                    '</p></div>';
                 return;
             }
             var maxResults = 50;
@@ -2647,10 +2664,37 @@
             }
         }
 
-        function renderEntries(entries, scope, folder) {
-            lastEntriesRender = { entries: entries, scope: scope, folder: folder };
-            bulkSyncSelection(entries, scope, folder);
+        // Shared facet filters (filters.js) above the entries table: Type in a
+        // folder, Type and Folder across search results. Selections persist in
+        // sessionStorage for this tab; the Folder facet only applies while
+        // searching.
+        var entryFilters = rgFilters.create({
+            mount: document.getElementById('entries-filters'),
+            id: 'connections',
+            facets: [
+                { key: 'type', label: 'Type',
+                  value: function(x) { var e = x.entry || x; return e.session_type; },
+                  render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } },
+                { key: 'folder', label: 'Folder', value: function(x) { return x.folderPath || null; } }
+            ],
+            onChange: function() {
+                if (searchActive) runSearch();
+                else if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+            }
+        });
+
+        function renderEntries(allEntries, scope, folder) {
+            lastEntriesRender = { entries: allEntries, scope: scope, folder: folder };
+            bulkSyncSelection(allEntries, scope, folder);
             var content = document.getElementById('entries-content');
+            entryFilters.show('folder', false);
+            entryFilters.update(allEntries);
+            var entries = entryFilters.apply(allEntries);
+            if (entries.length === 0 && allEntries.length > 0) {
+                updateBulkBar();
+                content.innerHTML = '<p class="empty">No entries match the current filters.</p>';
+                return;
+            }
             if (entries.length === 0) {
                 updateBulkBar();
                 if (isAdmin) {
