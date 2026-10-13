@@ -17,7 +17,7 @@
             border-right: 1px solid var(--border);
             padding-right: var(--s-4);
         }
-        .main { flex: 1; min-width: 0; }
+        .main { flex: 1; min-width: 0; padding: 0 var(--s-5); }
 
         /* Compact "open in new window" companion to the Connect button — a small
            icon, not a full-size button */
@@ -160,21 +160,32 @@
 
         /* Folder action bar */
         .folder-actions {
-            display: flex; align-items: center; gap: var(--s-2);
-            margin-bottom: var(--s-4); padding-bottom: var(--s-3);
+            display: flex; align-items: flex-start; gap: var(--s-3);
+            padding-bottom: var(--s-2);
             border-bottom: 1px solid var(--border);
             flex-wrap: wrap;
         }
         .folder-actions strong {
             font-size: var(--fz-xl); color: var(--text);
-            font-weight: bold; letter-spacing: 0.02em; line-height: 1.3;
+            font-weight: bold; letter-spacing: 0.02em; line-height: 1.2;
         }
-        .entries-heading { display: inline-flex; flex-direction: column; line-height: 1.15; }
-        .entries-key { color: var(--text-dim); font-size: var(--fz-sm); letter-spacing: 0.04em; }
+        .folder-actions-btns {
+            display: flex; align-items: center; gap: var(--s-2);
+            flex-wrap: wrap; flex-shrink: 0; margin-left: auto;
+        }
+        .entries-heading {
+            flex: 1 1 auto; min-width: 0;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        .entries-title-row {
+            display: flex; align-items: baseline; gap: var(--s-3);
+            flex-wrap: wrap; min-width: 0;
+        }
+        .entries-key { color: var(--text-dim); font-size: var(--fz-xs); letter-spacing: 0.04em; }
         .entries-key:empty { display: none; }
         .folder-desc.folder-key { letter-spacing: 0.04em; }
         .folder-actions .desc {
-            color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
+            color: var(--text-muted); font-size: var(--fz-sm); font-style: italic; min-width: 0;
         }
 
         /* Narrow desktops (a 1710px-wide MacBook display, 1600px monitors):
@@ -562,19 +573,25 @@
             border: 1px solid var(--border); border-radius: var(--radius);
             background: rgba(255,255,255,0.015);
         }
-        .main { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--s-2); }
+        .main { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-left: var(--s-5); padding-right: var(--s-5); }
         /* The folder header (name, description, search, actions, filters)
            pins to the top of the entries pane, so it stays under the nav and
            the active-sessions strip while a long table scrolls beneath it. */
         #entries-header {
             position: sticky; top: 0; z-index: 30;
             background: var(--bg);
-            padding-bottom: var(--s-2);
-            margin-bottom: var(--s-2);
+            padding: var(--s-3) var(--s-4) var(--s-2);
+            margin-bottom: var(--s-3);
             box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.6);
         }
-        #entries-header .folder-actions { margin-bottom: 0; }
-        #entries-header #entries-filters { margin: var(--s-2) 0 0 0; }
+        #entries-header .folder-actions { margin: 0; }
+        .entries-toolbar {
+            display: flex; align-items: center; gap: var(--s-3);
+            flex-wrap: wrap; margin-top: var(--s-2);
+        }
+        .entries-toolbar #entries-filters { margin: 0; }
+        .entries-toolbar .folder-actions-btns { margin-left: auto; }
+        #entries-header .list-tools { margin-bottom: 0; }
 
         /* Sidebar panel: one pinned header band (label, new-folder button,
            filter) on a surface tone, then the list with hairline dividers.
@@ -687,18 +704,23 @@
             <div class="main">
                 <div id="entries-header" style="display:none">
                     <div class="folder-actions">
-                        <span class="entries-heading">
-                            <strong id="entries-title"></strong>
+                        <div class="entries-heading">
+                            <div class="entries-title-row">
+                                <strong id="entries-title"></strong>
+                                <span id="entries-desc" class="desc"></span>
+                            </div>
                             <span id="entries-key" class="entries-key"></span>
-                        </span>
-                        <span id="entries-desc" class="desc"></span>
-                        <input type="search" id="connections-search" class="connections-search" placeholder="Search connections..." autocomplete="off" disabled />
-                        <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
-                        <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
-                        <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
-                        <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
+                        </div>
                     </div>
-                    <div id="entries-filters" class="list-tools"></div>
+                    <div class="entries-toolbar">
+                        <div id="entries-filters" class="list-tools"></div>
+                        <div class="folder-actions-btns">
+                            <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
+                            <button class="btn-add admin-only" id="btn-new-subfolder" style="display:none" title="Create subfolder under this folder">+ subfolder</button>
+                            <button class="btn-small admin-only" id="btn-edit-folder" style="display:none" title="Edit folder settings">edit folder</button>
+                            <button class="btn-small admin-only" id="btn-delete-folder" style="display:none" title="Delete folder and all entries">delete folder</button>
+                        </div>
+                    </div>
                 </div>
                 <div id="entries-content">
                     <p class="empty">Select a folder to view entries.</p>
@@ -714,6 +736,7 @@
         </div>
     </div>
 
+    <!-- Search results overlay: floats over an untouched folder view -->
     <!-- Folder create/edit modal -->
     <div class="modal-overlay" id="folder-modal">
         <div class="modal">
@@ -1409,11 +1432,6 @@
         var expandedPaths = {};    // "scope|path" -> true (tree expansion state; persisted)
         var EXPANDED_STORAGE_KEY = 'rustguac_connections_expanded';
         var SELECTED_STORAGE_KEY = 'rustguac_connections_selected';
-        // Quick-find search state
-        var searchIndex = null;        // [{scope, folderPath, entry, label, host, haystack}]
-        var searchIndexLoading = false;
-        var searchQuery = '';          // current query (lowercased & trimmed)
-        var searchActive = false;      // entries-content showing results, not folder entries
         function folderKey(scope, path) { return scope + '|' + path; }
         function folderPath(f) { return f.path || f.name; }
 
@@ -1793,7 +1811,7 @@
                     }
                     return;
                 }
-                loadFolders();
+                loadFolders(function() { rgHashOpen(); });
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
@@ -2077,11 +2095,10 @@
                         }
                         maybeAutoOpenSingleton();
                     });
-                    loadSearchIndex();
                     return;
                 }
                 maybeAutoOpenSingleton();
-                loadSearchIndex();
+                if (done) done();
             })
             .catch(function(err) {
                 showError('Failed to load folders: ' + err.message);
@@ -2317,165 +2334,7 @@
         // already triggers a refresh. Search runs entirely client-side against
         // the in-memory haystack.
 
-        function loadSearchIndex() {
-            var input = document.getElementById('connections-search');
-            if (!input) return;
-            searchIndexLoading = true;
-            input.placeholder = 'Indexing...';
-            input.disabled = true;
-            fetch('/api/addressbook/search-index', { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(res) {
-                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
-                return res.json();
-            })
-            .then(function(data) {
-                var rows = (data && data.entries) || [];
-                searchIndex = rows.map(function(r) {
-                    var e = r.entry;
-                    var label = e.display_name || e.name;
-                    var host = e.session_type === 'web' ? (e.url || '')
-                             : e.session_type === 'vdi' ? (e.container_image || '')
-                             : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
-                             : (e.hostname || '');
-                    var haystack = [
-                        e.name,
-                        e.display_name || '',
-                        host,
-                        e.username || '',
-                        e.proxmox_token_id || '',
-                        e.url || '',
-                        e.domain || '',
-                        e.session_type,
-                        r.folder_path
-                    ].join(' ').toLowerCase();
-                    return {
-                        scope: r.scope,
-                        folderPath: r.folder_path,
-                        entry: e,
-                        label: label,
-                        host: host,
-                        haystack: haystack
-                    };
-                });
-                searchIndexLoading = false;
-                input.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '... (press / )';
-                input.disabled = false;
-                if (searchQuery) runSearch();
-                // The full entry set is now known — refresh the proactive
-                // "credentials to set up" banner against it.
-                updateCredBanner();
-            })
-            .catch(function(err) {
-                searchIndexLoading = false;
-                input.placeholder = 'Search unavailable';
-                input.disabled = false;
-                if (window.console) console.warn('Search index failed:', err.message);
-            });
-        }
 
-        function runSearch() {
-            var input = document.getElementById('connections-search');
-            if (!input) return;
-            var q = (input.value || '').trim().toLowerCase();
-            searchQuery = q;
-            if (!q) {
-                if (searchActive) {
-                    searchActive = false;
-                    if (selectedFolder) {
-                        loadEntries(selectedFolder.scope, folderPath(selectedFolder));
-                    } else {
-                        document.getElementById('entries-content').innerHTML =
-                            '<p class="empty">Select a folder to view entries.</p>';
-                    }
-                }
-                return;
-            }
-            searchActive = true;
-            if (!searchIndex) {
-                document.getElementById('entries-content').innerHTML =
-                    '<p class="empty">Indexing connections, please wait...</p>';
-                return;
-            }
-            var tokens = q.split(/\s+/).filter(Boolean);
-            var matches = [];
-            for (var i = 0; i < searchIndex.length; i++) {
-                var row = searchIndex[i];
-                var ok = true;
-                for (var t = 0; t < tokens.length; t++) {
-                    if (row.haystack.indexOf(tokens[t]) === -1) { ok = false; break; }
-                }
-                if (!ok) continue;
-                var first = tokens[0];
-                var lcLabel = row.label.toLowerCase();
-                var lcName = row.entry.name.toLowerCase();
-                var score = 0;
-                if (lcLabel.indexOf(first) === 0 || lcName.indexOf(first) === 0) score += 100;
-                else if (lcLabel.indexOf(first) !== -1 || lcName.indexOf(first) !== -1) score += 50;
-                if ((row.host || '').toLowerCase().indexOf(first) !== -1) score += 20;
-                if (row.folderPath.toLowerCase().indexOf(first) !== -1) score += 10;
-                matches.push({ row: row, score: score });
-            }
-            matches.sort(function(a, b) {
-                if (b.score !== a.score) return b.score - a.score;
-                if (a.row.folderPath !== b.row.folderPath) return a.row.folderPath.localeCompare(b.row.folderPath);
-                return a.row.label.localeCompare(b.row.label);
-            });
-            renderSearchResults(matches, q, tokens);
-        }
-
-        function renderSearchResults(matches, query, tokens) {
-            // Selection is per folder; search results are not selectable yet.
-            bulkSel.key = null;
-            bulkSel.names.clear();
-            updateBulkBar();
-            var content = document.getElementById('entries-content');
-            entryFilters.show('folder', true);
-            entryFilters.update(matches.map(function(m) { return m.row; }));
-            var allMatches = matches;
-            matches = matches.filter(function(m) { return entryFilters.apply([m.row]).length > 0; });
-            if (matches.length === 0) {
-                content.innerHTML = '<div class="empty-state" style="padding:2em;margin:1em 0">' +
-                    '<p style="color:var(--text-dim);margin:0">' +
-                    (allMatches.length ? 'No matches for ' + escapeHtml(query) + ' with the current filters' : 'No matches for ' + escapeHtml(query)) +
-                    '</p></div>';
-                return;
-            }
-            var maxResults = 50;
-            var more = matches.length - maxResults;
-            var shown = matches.slice(0, maxResults);
-            var html = '<table class="entries-table"><thead><tr>' +
-                '<th>Name</th><th>Type</th><th>Host</th><th>User</th><th>Folder</th><th></th><th></th>' +
-                '</tr></thead><tbody>';
-            shown.forEach(function(m) {
-                var r = m.row;
-                var e = r.entry;
-                var typeLabel = e.session_type.toUpperCase();
-                if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
-                var typeCls = 'type-' + e.session_type;
-                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
-                var connectLabel = needsPrompt ? 'Login...' : 'Connect';
-                var userCol = e.session_type === 'proxmox'
-                    ? highlight(e.proxmox_token_id || '', tokens)
-                    : (e.username ? highlight(e.username, tokens) : '');
-                if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
-                var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
-                html += '<tr>';
-                html += '<td>' + entryNameHtml(r.label, tokens) + '</td>';
-                html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
-                html += '<td>' + highlight(r.host || '', tokens) + '</td>';
-                html += '<td>' + userCol + '</td>';
-                html += '<td><span class="search-folder-cell"><span class="folder-scope">' + scopeIcon + '</span> ' + highlight(r.folderPath, tokens) + '</span></td>';
-                html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + connectLabel + '</button>'
-                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">&#x29c9;</button></td>';
-                html += '<td><a href="#" class="search-open-folder" data-open-scope="' + escapeAttr(r.scope) + '" data-open-folder="' + escapeAttr(r.folderPath) + '" title="Open this folder">↗ open folder</a></td>';
-                html += '</tr>';
-            });
-            html += '</tbody></table>';
-            if (more > 0) {
-                html += '<div class="search-more">+' + more + ' more match' + (more === 1 ? '' : 'es') + ' — refine your search to narrow results</div>';
-            }
-            content.innerHTML = html;
-        }
 
         function highlight(text, tokens) {
             var safe = escapeHtml(text || '');
@@ -2488,12 +2347,23 @@
             return safe.replace(re, '<mark>$1</mark>');
         }
 
-        function openFolderFromSearch(scope, targetPath) {
-            var input = document.getElementById('connections-search');
-            if (input) input.value = '';
-            searchQuery = '';
-            searchActive = false;
+        // Open a folder requested via the URL hash (#open=scope/path), used
+        // when the global search on another page links here.
+        function rgHashOpen() {
+            var m = /^#open=(.+)$/.exec(location.hash || '');
+            if (!m) return;
+            var decoded = decodeURIComponent(m[1]);
+            var slash = decoded.indexOf('/');
+            if (slash < 0) return;
+            var scope = decoded.slice(0, slash), path = decoded.slice(slash + 1);
+            try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+            window.rgSelectFolder(scope, path);
+        }
 
+        // Select a folder in the sidebar: expand its ancestors, highlight it and
+        // load its entries. Exposed for the global search (search.js) and the
+        // #open=scope/path URL hash, so a folder can be opened from any page.
+        window.rgSelectFolder = function(scope, targetPath) {
             var parts = targetPath.split('/');
             var ancestors = [];
             for (var i = 1; i < parts.length; i++) {
@@ -2534,7 +2404,7 @@
                 }
             }
             loadNext();
-        }
+        };
 
         function loadEntries(scope, folderPath, forceRefresh) {
             var header = document.getElementById('entries-header');
@@ -2650,8 +2520,8 @@
             if (!banner) return;
             if (!setCredVars) { banner.style.display = 'none'; return; }
             var entries = [];
-            if (searchIndex) {
-                entries = searchIndex.map(function(r) { return r.entry; });
+            if (window.rgSearchIndex) {
+                entries = window.rgSearchIndex.map(function(r) { return r.entry; });
             } else {
                 Object.keys(folderEntries).forEach(function(k) {
                     (folderEntries[k] || []).forEach(function(e) { entries.push(e); });
@@ -2678,7 +2548,7 @@
         }
 
         function refreshEntriesView() {
-            if (lastEntriesRender && !searchActive) {
+            if (lastEntriesRender) {
                 renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
             }
         }
@@ -2687,18 +2557,16 @@
         // folder, Type and Folder across search results. Selections persist in
         // sessionStorage for this tab; the Folder facet only applies while
         // searching.
+        // Folder-view filter (Type), shown in the folder header.
+        var typeFacet = { key: 'type', label: 'Type',
+            value: function(x) { var e = x.entry || x; return e.session_type; },
+            render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } };
         var entryFilters = rgFilters.create({
             mount: document.getElementById('entries-filters'),
             id: 'connections',
-            facets: [
-                { key: 'type', label: 'Type',
-                  value: function(x) { var e = x.entry || x; return e.session_type; },
-                  render: function(v) { return '<span class="type-badge type-' + escapeAttr(v) + '">' + escapeHtml(v) + '</span>'; } },
-                { key: 'folder', label: 'Folder', value: function(x) { return x.folderPath || null; } }
-            ],
+            facets: [ typeFacet ],
             onChange: function() {
-                if (searchActive) runSearch();
-                else if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+                if (lastEntriesRender) renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
             }
         });
 
@@ -2706,7 +2574,6 @@
             lastEntriesRender = { entries: allEntries, scope: scope, folder: folder };
             bulkSyncSelection(allEntries, scope, folder);
             var content = document.getElementById('entries-content');
-            entryFilters.show('folder', false);
             entryFilters.update(allEntries);
             var entries = entryFilters.apply(allEntries);
             if (entries.length === 0 && allEntries.length > 0) {
@@ -3140,15 +3007,21 @@
         function doConnect(scope, folder, name, btn, extraBody, newWindow) {
             var isWinBtn = !!(btn.getAttribute && btn.getAttribute('data-connect-win'));
             btn.disabled = true;
-            if (!isWinBtn) btn.textContent = 'Connecting...';
+            if (!isWinBtn) btn.classList.add('loading');
             clearError();
-            // A window opened AFTER the async connect fetch is popup-blocked (no
-            // user gesture), so open it synchronously now (we are still inside the
-            // click gesture) and navigate it once the session exists.
+            // Open the target window synchronously now, while we are still
+            // inside the click gesture: a window opened after the async fetch
+            // is popup-blocked, and — the reason it matters for a
+            // fullscreen-on-connect entry — a window opened within the gesture
+            // carries the user activation, so the client can enter fullscreen
+            // on load with no second click. The ⧉ button gets a sized popup;
+            // a plain Connect gets a tab.
             var targetWin = null;
             if (newWindow) {
                 targetWin = window.open('', '_blank',
                     'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+            } else {
+                targetWin = window.open('', '_blank');
             }
             var body = extraBody || {};
             // Send browser dimensions so RDP sessions start at correct resolution
@@ -3201,7 +3074,7 @@
             })
             .finally(function() {
                 btn.disabled = false;
-                if (!isWinBtn) btn.textContent = 'Connect';
+                btn.classList.remove('loading');
             });
         }
 
@@ -3230,8 +3103,7 @@
             document.getElementById('cred-modal').classList.remove('active');
             if (pendingConnect && pendingConnect.btn) {
                 pendingConnect.btn.disabled = false;
-                if (!pendingConnect.btn.getAttribute('data-connect-win'))
-                    pendingConnect.btn.textContent = 'Connect';
+                pendingConnect.btn.classList.remove('loading');
             }
             pendingConnect = null;
         });
@@ -3258,19 +3130,9 @@
             if (e.key === 'Enter') document.getElementById('cred-connect').click();
         });
 
-        document.getElementById('entries-content').addEventListener('click', function(e) {
+        // Connect / clone / delete / edit actions for the folder entries table.
+        function handleEntryActionsClick(e) {
             var btn = e.target;
-
-            // Open folder from a search result row
-            var openLink = btn.closest && btn.closest('.search-open-folder');
-            if (openLink) {
-                e.preventDefault();
-                openFolderFromSearch(
-                    openLink.getAttribute('data-open-scope'),
-                    openLink.getAttribute('data-open-folder')
-                );
-                return;
-            }
 
             if (btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win')) {
                 var newWindow = !!btn.getAttribute('data-connect-win');
@@ -3279,21 +3141,10 @@
                 var folder = btn.getAttribute('data-folder');
                 clearError();
 
-                // Find the entry data. When the table is showing search results,
-                // currentEntries is the previously-selected folder's entries —
-                // look in searchIndex instead.
+                // Find the entry in the current folder's entries.
                 var entry = null;
-                if (searchActive && searchIndex) {
-                    for (var si = 0; si < searchIndex.length; si++) {
-                        var r = searchIndex[si];
-                        if (r.scope === scope && r.folderPath === folder && r.entry.name === name) {
-                            entry = r.entry; break;
-                        }
-                    }
-                } else {
-                    for (var i = 0; i < currentEntries.length; i++) {
-                        if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
-                    }
+                for (var i = 0; i < currentEntries.length; i++) {
+                    if (currentEntries[i].name === name) { entry = currentEntries[i]; break; }
                 }
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
@@ -3356,7 +3207,8 @@
                     btn.getAttribute('data-type')
                 );
             }
-        });
+        }
+        document.getElementById('entries-content').addEventListener('click', handleEntryActionsClick);
 
         // ── Folder modal ──
 
@@ -4765,38 +4617,6 @@
             }
         });
 
-        // Quick-find: '/' focuses search, Esc clears + blurs.
-        // Skip when typing in any input/textarea or when a modal is open.
-        var _searchInput = document.getElementById('connections-search');
-        if (_searchInput) {
-            _searchInput.addEventListener('input', runSearch);
-            _searchInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    if (_searchInput.value) {
-                        _searchInput.value = '';
-                        runSearch();
-                    } else {
-                        _searchInput.blur();
-                    }
-                    e.stopPropagation();
-                }
-            });
-        }
-        document.addEventListener('keydown', function(e) {
-            if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
-            var t = document.activeElement;
-            if (t) {
-                var tag = t.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
-            }
-            if (document.querySelector('.modal-overlay.active')) return;
-            var input = document.getElementById('connections-search');
-            if (input && !input.disabled) {
-                e.preventDefault();
-                input.focus();
-                input.select();
-            }
-        });
 
         // ── My Credentials ──
         // Callback to run after a successful credential save (used by the
@@ -5748,5 +5568,14 @@
         }
     </script>
     <script src="/ui.js"></script>
+    <script src="/search.js"></script>
+    <script>
+        // The global search (search.js) loads the full address-book index; the
+        // credentials banner reads it (window.rgSearchIndex) for a complete
+        // view, so refresh it whenever the index is ready or changes.
+        document.addEventListener('rg-search-index-ready', function() {
+            try { if (typeof updateCredBanner === 'function') updateCredBanner(); } catch (e) {}
+        });
+    </script>
 </body>
 </html>

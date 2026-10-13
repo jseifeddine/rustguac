@@ -30,6 +30,8 @@ One spec per change, named after the branch that introduced it:
 | `facet-filters` | shared facets narrow lists, persist, combine with search |
 | `folder-display-name` | display name over the key, modal field round-trips |
 | `themed-dialogs` | `rgConfirm`/`rgAlert` replace native dialogs |
+| `global-search` | `/` opens the overlay on every signed-in page, folder view untouched; nothing on the login page, for anonymous or viewer callers, or from a previous login's cache |
+| `search-under-modals` | a page modal covers the search box |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
