@@ -227,15 +227,17 @@
                         revokeBtn.textContent = 'revoke';
                         revokeBtn.addEventListener('click', (function(id, name) {
                             return function() {
-                                if (!confirm('Revoke token "' + name + '"? This cannot be undone.')) return;
-                                fetch('/api/me/tokens/' + id, {
-                                    method: 'DELETE',
-                                    headers: apiHeaders(),
-                                    credentials: 'same-origin'
-                                })
-                                .then(function(res) {
-                                    if (!res.ok) return res.json().then(function(d) { showError(d.error); });
-                                    loadTokens();
+                                rgConfirm('Revoke token "' + name + '"? This cannot be undone.', { danger: true, confirmText: 'Revoke' }).then(function(ok) {
+                                    if (!ok) return;
+                                    fetch('/api/me/tokens/' + id, {
+                                        method: 'DELETE',
+                                        headers: apiHeaders(),
+                                        credentials: 'same-origin'
+                                    })
+                                    .then(function(res) {
+                                        if (!res.ok) return res.json().then(function(d) { showError(d.error); });
+                                        loadTokens();
+                                    });
                                 });
                             };
                         })(t.id, t.name));
@@ -336,5 +338,6 @@
             }
         }, 10000);
     </script>
+    <script src="/ui.js"></script>
 </body>
 </html>

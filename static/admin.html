@@ -298,10 +298,12 @@
                     delBtn.textContent = 'delete';
                     delBtn.addEventListener('click', (function(email) {
                         return function() {
-                            if (!confirm('Delete user ' + email + '?')) return;
-                            fetch('/api/users/' + encodeURIComponent(email), {
-                                method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
-                            }).then(function() { loadUsers(); });
+                            rgConfirm('Delete user ' + email + '?', { danger: true, confirmText: 'Delete' }).then(function(ok) {
+                                if (!ok) return;
+                                fetch('/api/users/' + encodeURIComponent(email), {
+                                    method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
+                                }).then(function() { loadUsers(); });
+                            });
                         };
                     })(u.email));
                     actTd.appendChild(delBtn);
@@ -456,16 +458,18 @@
                     revokeBtn.textContent = 'revoke';
                     revokeBtn.addEventListener('click', (function(id, name, email) {
                         return function() {
-                            if (!confirm('Revoke token "' + name + '" for ' + email + '?')) return;
-                            fetch('/api/admin/user-tokens/' + id, {
-                                method: 'DELETE',
-                                headers: apiHeaders(),
-                                credentials: 'same-origin'
-                            })
-                            .then(function(res) {
-                                if (!res.ok) return res.json().then(function(d) { showError(d.error); });
-                                loadAllTokens();
-                                loadAuditLog();
+                            rgConfirm('Revoke token "' + name + '" for ' + email + '?', { danger: true, confirmText: 'Revoke' }).then(function(ok) {
+                                if (!ok) return;
+                                fetch('/api/admin/user-tokens/' + id, {
+                                    method: 'DELETE',
+                                    headers: apiHeaders(),
+                                    credentials: 'same-origin'
+                                })
+                                .then(function(res) {
+                                    if (!res.ok) return res.json().then(function(d) { showError(d.error); });
+                                    loadAllTokens();
+                                    loadAuditLog();
+                                });
                             });
                         };
                     })(t.id, t.name, t.email || ''));
@@ -653,5 +657,6 @@
         // Auto-refresh
         setInterval(function() { loadUsers(); loadMappings(); loadAllTokens(); }, 10000);
     </script>
+    <script src="/ui.js"></script>
 </body>
 </html>

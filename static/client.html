@@ -879,7 +879,7 @@
                 var win = window.open('', 'rustguac-mon-' + index,
                     'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
                 if (!win) {
-                    alert('Popup blocked. Allow popups for this site to open an extra monitor.');
+                    rgAlert('Popup blocked. Allow popups for this site to open an extra monitor.');
                     renderMonitorControls();
                     return;
                 }
@@ -2036,5 +2036,6 @@
             client.connect(connectData);
         }
     </script>
+    <script src="/ui.js"></script>
 </body>
 </html>
