@@ -46,6 +46,8 @@
             font-weight: normal;
         }
         .btn-add-hop:hover { background: var(--surface); border-color: var(--accent); }
+            .adhoc-modal form { background: transparent; border: 0; padding: 0; margin: 0; max-width: none; width: auto; }
+        .adhoc-modal #new-session-fields { margin-top: 0; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -70,12 +72,12 @@
         Use the <a href="/connections.html">Connections</a> to connect to saved entries.
     </div>
 
-    <form id="session-form" style="display:none">
-        <div style="display:flex;align-items:center;gap:0.5em;cursor:pointer" id="new-session-toggle">
-            <span id="new-session-arrow" style="color:var(--accent)">&#9654;</span>
-            <strong style="color:var(--accent)">New Ad-Hoc Session</strong>
-        </div>
-        <div id="new-session-fields" style="display:none;margin-top:0.8em">
+    <div id="adhoc-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="adhoc-modal-title">
+    <div class="modal adhoc-modal">
+    <h3 id="adhoc-modal-title">New Ad-Hoc Session</h3>
+    <p class="modal-hint">A one-off session to any host. Nothing is saved; use Connections for entries you come back to.</p>
+    <form id="session-form">
+        <div id="new-session-fields">
         <label>Type
             <select id="session-type" style="display:block;width:100%;padding:0.4em;margin-top:0.2em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;">
                 <option value="ssh" selected>SSH</option>
@@ -175,16 +177,23 @@
         <label>Banner message (shown to user before session starts)
             <input type="text" id="banner" placeholder="e.g. Please enter your credentials when prompted">
         </label>
-        <button type="submit" id="connect-btn">Connect</button>
+        <div class="modal-actions">
+            <button type="submit" id="connect-btn">Connect</button>
+            <button type="button" class="btn-cancel" id="adhoc-cancel">Cancel</button>
+        </div>
         <div id="error"></div>
         </div>
     </form>
+    </div>
+    </div>
 
     <div id="sessions">
         <div class="section-head">
             <strong>Sessions</strong>
             <span class="section-count" id="session-counts"></span>
+            <button type="button" class="btn-add section-action" id="new-session-btn" style="display:none" title="Start a one-off session to any host. Nothing is saved.">&#9889; New ad-hoc session</button>
         </div>
+        <div id="session-filters" class="list-tools"></div>
         <table>
             <thead><tr>
                 <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
@@ -237,7 +246,7 @@
                 }
                 if (level >= 3) {
                     // poweruser+ can create ad-hoc sessions
-                    document.getElementById('session-form').style.display = '';
+                    document.getElementById('new-session-btn').style.display = '';
                     document.getElementById('reports-link').style.display = '';
                 }
             })
@@ -248,7 +257,7 @@
             document.documentElement.setAttribute('data-role-level', '4');
             // API key users are always admin
             myRole = 'admin';
-            document.getElementById('session-form').style.display = '';
+            document.getElementById('new-session-btn').style.display = '';
             document.getElementById('admin-link').style.display = '';
             document.getElementById('tokens-link').style.display = '';
             document.getElementById('reports-link').style.display = '';
@@ -318,17 +327,21 @@
             jumpSection.style.display = v === 'vdi' ? 'none' : '';
         });
 
-        // Collapsible "New Ad-Hoc Session" section
-        document.getElementById('new-session-toggle').addEventListener('click', function() {
-            var fields = document.getElementById('new-session-fields');
-            var arrow = document.getElementById('new-session-arrow');
-            if (fields.style.display === 'none') {
-                fields.style.display = '';
-                arrow.innerHTML = '&#9660;';
-            } else {
-                fields.style.display = 'none';
-                arrow.innerHTML = '&#9654;';
-            }
+        // "New ad-hoc session" opens the form in a modal; Cancel, Escape or
+        // a click on the backdrop closes it. The form itself is unchanged.
+        var adhocModal = document.getElementById('adhoc-modal');
+        function openAdhoc() {
+            adhocModal.classList.add('active');
+            document.getElementById('error').textContent = '';
+            var first = document.getElementById('session-type');
+            if (first) { try { first.focus(); } catch (e) {} }
+        }
+        function closeAdhoc() { adhocModal.classList.remove('active'); }
+        document.getElementById('new-session-btn').addEventListener('click', openAdhoc);
+        document.getElementById('adhoc-cancel').addEventListener('click', closeAdhoc);
+        adhocModal.addEventListener('mousedown', function(e) { if (e.target === adhocModal) closeAdhoc(); });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && adhocModal.classList.contains('active')) closeAdhoc();
         });
 
         // Show jump section on initial load (default is SSH)
