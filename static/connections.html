@@ -1844,20 +1844,22 @@
                             ev.stopPropagation();
                             var sid = termBtn.getAttribute('data-terminate');
                             var label = termBtn.getAttribute('data-name') || sid;
-                            if (!confirm('Terminate session "' + label + '"? Any unsaved work will be lost.')) return;
-                            termBtn.disabled = true;
-                            termBtn.textContent = 'Ending...';
-                            fetch('/api/sessions/' + sid, {
-                                method: 'DELETE',
-                                headers: apiHeaders(),
-                                credentials: 'same-origin'
-                            }).then(function(res) {
-                                if (!res.ok) return res.text().then(function(t) { throw new Error(t || 'terminate failed'); });
-                                loadActiveSessions();
-                            }).catch(function(err) {
-                                termBtn.disabled = false;
-                                termBtn.textContent = 'Terminate';
-                                showError('Terminate failed: ' + err.message);
+                            rgConfirm('Terminate session "' + label + '"? Any unsaved work will be lost.', { danger: true, confirmText: 'Terminate' }).then(function(ok) {
+                                if (!ok) return;
+                                termBtn.disabled = true;
+                                termBtn.textContent = 'Ending...';
+                                fetch('/api/sessions/' + sid, {
+                                    method: 'DELETE',
+                                    headers: apiHeaders(),
+                                    credentials: 'same-origin'
+                                }).then(function(res) {
+                                    if (!res.ok) return res.text().then(function(t) { throw new Error(t || 'terminate failed'); });
+                                    loadActiveSessions();
+                                }).catch(function(err) {
+                                    termBtn.disabled = false;
+                                    termBtn.textContent = 'Terminate';
+                                    showError('Terminate failed: ' + err.message);
+                                });
                             });
                         });
                     }
@@ -3174,14 +3176,16 @@
                 var name = btn.getAttribute('data-delete-entry');
                 var scope = btn.getAttribute('data-scope');
                 var folder = btn.getAttribute('data-folder');
-                if (!confirm('Delete entry "' + name + '"?')) return;
-                fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name), {
-                    method: 'DELETE',
-                    headers: apiHeaders(),
-                    credentials: 'same-origin'
-                }).then(function(res) {
-                    if (!res.ok) return res.text().then(function(t) { showError(t); });
-                    loadEntries(scope, folder, true);
+                rgConfirm('Delete entry "' + name + '"?', { danger: true, confirmText: 'Delete' }).then(function(ok) {
+                    if (!ok) return;
+                    fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name), {
+                        method: 'DELETE',
+                        headers: apiHeaders(),
+                        credentials: 'same-origin'
+                    }).then(function(res) {
+                        if (!res.ok) return res.text().then(function(t) { showError(t); });
+                        loadEntries(scope, folder, true);
+                    });
                 });
                 return;
             }
@@ -3437,8 +3441,9 @@
             var warning = hasSubtree
                 ? 'Delete folder "' + selPath + '" AND all its subfolders and entries?\n\nThis recursively removes the entire subtree and cannot be undone.'
                 : 'Delete folder "' + selPath + '" and all its entries?\n\nThis cannot be undone.';
-            if (!confirm(warning)) return;
-            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
+            rgConfirm(warning, { title: 'Delete folder', danger: true, confirmText: 'Delete' }).then(function(ok) {
+              if (!ok) return;
+              fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
                 method: 'DELETE',
                 headers: apiHeaders(),
                 credentials: 'same-origin'
@@ -3460,6 +3465,7 @@
                 document.getElementById('entries-header').style.display = 'none';
                 document.getElementById('entries-content').innerHTML = '<p class="empty">Select a folder to view entries.</p>';
                 loadFolders();
+              });
             });
         });
 
@@ -3796,7 +3802,7 @@
         function probeHostKey(hopIndex) {
             var hop = hopList[hopIndex];
             if (!hop || !hop.hostname || !hop.hostname.trim()) {
-                alert('Enter a hostname first.');
+                rgAlert('Enter a hostname first.');
                 return;
             }
             var btn = document.querySelector('.hop-verify-btn[data-hop="' + hopIndex + '"]');
@@ -3810,22 +3816,23 @@
             }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
             .then(function(res) {
                 if (!res.ok) {
-                    alert('Probe failed: ' + (res.data.error || 'unknown error'));
+                    rgAlert('Probe failed: ' + (res.data.error || 'unknown error'));
                     if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
                     return;
                 }
-                var msg = 'Host key for ' + hop.hostname.trim() + ':' + (hop.port || 22) + ':\n\n' +
-                    res.data.fingerprint + ' (' + res.data.algorithm + ')\n\n' +
-                    'Trust this key?';
-                if (confirm(msg)) {
-                    hopList[hopIndex].host_key = res.data.host_key;
-                    hopList[hopIndex].host_key_fingerprint = res.data.fingerprint;
-                    renderHops();
-                } else {
-                    if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
-                }
+                var msg = hop.hostname.trim() + ':' + (hop.port || 22) + '\n\n' +
+                    res.data.fingerprint + ' (' + res.data.algorithm + ')';
+                rgConfirm(msg, { title: 'Trust host key?', confirmText: 'Trust', safe: true }).then(function(ok) {
+                    if (ok) {
+                        hopList[hopIndex].host_key = res.data.host_key;
+                        hopList[hopIndex].host_key_fingerprint = res.data.fingerprint;
+                        renderHops();
+                    } else {
+                        if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
+                    }
+                });
             }).catch(function(e) {
-                alert('Probe failed: ' + e.message);
+                rgAlert('Probe failed: ' + e.message);
                 if (btn) { btn.disabled = false; btn.textContent = hop.host_key ? 'Re-verify' : 'Verify Host Key'; }
             });
         }
@@ -5593,5 +5600,6 @@
 
         init();
     </script>
+    <script src="/ui.js"></script>
 </body>
 </html>

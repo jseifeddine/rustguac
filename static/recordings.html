@@ -478,17 +478,18 @@
             }
             var deleteName = e.target.getAttribute('data-delete-rec');
             if (deleteName) {
-                if (!confirm('Delete recording ' + deleteName + '?')) return;
-                fetch('/api/recordings/' + encodeURIComponent(deleteName), {
-                    method: 'DELETE',
-                    headers: apiHeaders(),
-                    credentials: 'same-origin'
-                }).then(function() {
-                    refreshRecordings();
-                    // Close player if this recording is playing
-                    if (document.getElementById('player-title').textContent === deleteName) {
-                        closePlayer();
-                    }
+                rgConfirm('Delete recording ' + deleteName + '?', { danger: true, confirmText: 'Delete' }).then(function(ok) {
+                    if (!ok) return;
+                    fetch('/api/recordings/' + encodeURIComponent(deleteName), {
+                        method: 'DELETE',
+                        headers: apiHeaders(),
+                        credentials: 'same-origin'
+                    }).then(function() {
+                        refreshRecordings();
+                        if (document.getElementById('player-title').textContent === deleteName) {
+                            closePlayer();
+                        }
+                    });
                 });
             }
         });
@@ -653,5 +654,6 @@
         setInterval(refreshRecordings, 15000);
         setInterval(refreshTypescripts, 15000);
     </script>
+    <script src="/ui.js"></script>
 </body>
 </html>
