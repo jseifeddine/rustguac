@@ -1330,6 +1330,7 @@
         // Quick-find search state
         var searchIndex = null;        // [{scope, folderPath, entry, label, host, haystack}]
         var searchIndexLoading = false;
+        var searchIndexStale = false;  // the book changed since the index was built; rebuilt when search is next used
         var searchQuery = '';          // current query (lowercased & trimmed)
         var searchActive = false;      // entries-content showing results, not folder entries
         function folderKey(scope, path) { return scope + '|' + path; }
@@ -1706,6 +1707,9 @@
                     }
                     return;
                 }
+                // The first poll records the version this page is about to
+                // load; issued before the load so nothing in between is missed.
+                startLiveRefresh();
                 loadFolders();
                 loadCredStatus();
                 loadActiveSessions();
@@ -2218,17 +2222,318 @@
             return null;
         }
 
-        // ── Quick-find search ──────────────────────────────────────────────
-        // Index is fetched once after loadFolders() and after any mutation that
-        // already triggers a refresh. Search runs entirely client-side against
-        // the in-memory haystack.
+        // ── Live refresh ──
+        // GET /api/addressbook/version?since=N answers from memory with what
+        // rustguac changed in the address book after version N: which folders,
+        // and whether it was their entries or the folder itself. It is polled
+        // every few seconds while the tab is visible and no dialog is open,
+        // and a tab acts only on what it shows:
+        //   entries changed in the open folder   -> that folder is re-read
+        //   entries changed elsewhere            -> the cached copy is forgotten;
+        //                                           nothing is read until opened
+        //   a folder created, deleted or changed -> the folder list is re-read
+        //                                           (no entries), plus the open
+        //                                           folder if it was in that subtree
+        //   the search index                     -> marked stale and rebuilt the
+        //                                           next time the box is used;
+        //                                           while results are showing, only
+        //                                           the changed folder's rows are
+        //                                           re-read and patched in
+        // So one change costs a tab at most one folder's entries plus one
+        // folder list, never the whole book, and a poll costs no Vault read.
+        // `changes: null` (first poll, or the tab fell further behind than
+        // the server's log reaches, or the server restarted) refreshes what
+        // is shown, once. Nothing is reloaded on a timer. A hidden tab does
+        // not poll and catches up the moment it is shown; a tab with a
+        // dialog open does not poll either, so a change waits for the dialog
+        // instead of being missed. A user's own credential variables are not
+        // address-book changes and never arrive here: the tab that saved them
+        // reloads its own status (saveMyCredentials).
+        var LIVE_POLL_MS = 3000;
+        var liveVersion = null;   // the version this tab's view reflects
+        var liveTimer = null;
+        var liveBusy = false;
 
-        function loadSearchIndex() {
+        // What a batch of changes means for this tab. Pure, so it is tested
+        // without a browser (tests/connections-live.mjs).
+        //   changes: [{scope, folder, kind: 'entries'|'tree'|'all'}], or null
+        //            to refresh everything shown
+        //   view:    { selectedKey, searchActive, indexLoaded, cachedKeys }
+        // Returns { tree, treeAll, treeKeys, fetch: [key], drop: [key],
+        //           index: 'keep'|'stale'|'rebuild' }: `fetch` is re-read now
+        //           (the open folder, or a folder whose index rows to patch),
+        //           `drop` is forgotten until opened.
+        function livePlan(changes, view) {
+            var plan = { tree: false, treeAll: false, treeKeys: [], fetch: [], drop: [], index: 'keep' };
+            var all = !changes;
+            var stale = false;
+            var touched = {};
+            var under = function(k, key) { return k === key || k.indexOf(key + '/') === 0; };
+            (changes || []).forEach(function(c) { if (c.kind === 'all') all = true; });
+            if (!all) changes.forEach(function(c) {
+                var key = c.scope + '|' + c.folder;
+                if (c.kind === 'tree') {
+                    plan.tree = true;
+                    plan.treeKeys.push(key);
+                    stale = true;   // paths or visibility moved: only a walk knows
+                    // Whatever was cached below the folder went with it.
+                    view.cachedKeys.forEach(function(k) { if (under(k, key)) touched[k] = 'drop'; });
+                    if (view.selectedKey && under(view.selectedKey, key)) touched[view.selectedKey] = 'fetch';
+                } else if (key === view.selectedKey) {
+                    touched[key] = 'fetch';
+                } else if (view.searchActive && view.indexLoaded) {
+                    touched[key] = touched[key] || 'patch';
+                } else {
+                    touched[key] = touched[key] || 'drop';
+                    stale = true;
+                }
+            });
+            if (all) {
+                plan.tree = true;
+                plan.treeAll = true;
+                stale = true;
+                view.cachedKeys.forEach(function(k) { touched[k] = 'drop'; });
+                if (view.selectedKey) touched[view.selectedKey] = 'fetch';
+            }
+            if (stale) plan.index = (view.searchActive && view.indexLoaded) ? 'rebuild' : 'stale';
+            Object.keys(touched).forEach(function(k) {
+                var what = touched[k];
+                // While searching the open folder is not on screen: patch the
+                // index from it, or just forget it when the index is being
+                // rebuilt anyway.
+                if (what === 'fetch' && view.searchActive) what = 'patch';
+                if (what === 'patch' && plan.index === 'rebuild') what = 'drop';
+                if (what === 'drop') plan.drop.push(k); else plan.fetch.push(k);
+            });
+            return plan;
+        }
+
+        function liveView() {
+            return {
+                selectedKey: selectedFolder ? folderKey(selectedFolder.scope, folderPath(selectedFolder)) : null,
+                searchActive: searchActive,
+                indexLoaded: !!searchIndex,
+                cachedKeys: Object.keys(folderEntries)
+            };
+        }
+
+        function liveApply(plan) {
+            plan.drop.forEach(function(k) { delete folderEntries[k]; delete folderEntryCounts[k]; });
+            if (plan.index === 'stale') searchIndexStale = true;
+            if (plan.index === 'rebuild') loadSearchIndex(true);
+            var fetchFolders = function() {
+                plan.fetch.forEach(function(k) {
+                    var sep = k.indexOf('|');
+                    var scope = k.slice(0, sep), path = k.slice(sep + 1);
+                    if (!searchActive && liveView().selectedKey === k) {
+                        loadEntries(scope, path, true);
+                    } else {
+                        refetchFolderEntries(scope, path);
+                    }
+                });
+            };
+            if (plan.tree) reloadFolderList(plan, fetchFolders); else fetchFolders();
+        }
+
+        // Re-read one folder's entries into the cache and the search index
+        // without showing it: a changed folder while search results are up.
+        function refetchFolderEntries(scope, path) {
+            var key = folderKey(scope, path);
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(path) + '/entries', {
+                headers: apiHeaders(),
+                credentials: 'same-origin'
+            })
+            .then(function(res) { return res.ok ? res.json() : []; })
+            .then(function(entries) {
+                if (Array.isArray(entries) && entries.length) {
+                    folderEntries[key] = entries;
+                    folderEntryCounts[key] = entries.length;
+                } else {
+                    delete folderEntries[key];
+                    delete folderEntryCounts[key];
+                    entries = [];
+                }
+                indexPutFolder(scope, path, entries);
+                renderFolders();
+                if (searchActive && searchQuery) runSearch();
+            })
+            .catch(function() {});
+        }
+
+        // Re-read the folder list alone (no entries) after a folder came,
+        // went or changed, then the subfolder listings that change made
+        // stale: the changed folder's parent (it came or went there), its
+        // own, and its subtree's. The open folder is re-resolved; if it is
+        // gone the first folder is shown, as after deleting one here.
+        function reloadFolderList(plan, cb) {
+            fetch('/api/addressbook/folders', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.json();
+            })
+            .then(function(list) {
+                folders = (list || []).map(function(f) {
+                    return {
+                        name: f.name,
+                        scope: f.scope,
+                        description: f.description || '',
+                        path: f.path || f.name,
+                        has_children: !!f.has_children
+                    };
+                });
+                var parentOf = function(key) { var i = key.lastIndexOf('/'); return i < 0 ? null : key.slice(0, i); };
+                Object.keys(subfolderCache).forEach(function(k) {
+                    var stale = plan.treeAll || plan.treeKeys.some(function(key) {
+                        return k === key || k === parentOf(key) || k.indexOf(key + '/') === 0;
+                    });
+                    if (stale) delete subfolderCache[k];
+                });
+                var emptyEl = document.getElementById('empty-state');
+                var mainEl = document.getElementById('main-content');
+                if (folders.length === 0 && unavailableScopes.length === 0 && isAdmin) {
+                    emptyEl.style.display = '';
+                    mainEl.style.display = 'none';
+                } else {
+                    emptyEl.style.display = 'none';
+                    mainEl.style.display = '';
+                }
+                restoreExpandedTree(function() {
+                    resolveSelectedFolder(function(sel) {
+                        if (selectedFolder && !sel) {
+                            var goneKey = folderKey(selectedFolder.scope, folderPath(selectedFolder));
+                            plan.fetch = plan.fetch.filter(function(k) { return k !== goneKey; });
+                            selectedFolder = folders[0] || null;
+                            saveSelectedFolder();
+                            if (selectedFolder && !searchActive) {
+                                loadEntries(selectedFolder.scope, folderPath(selectedFolder));
+                            } else if (!selectedFolder) {
+                                document.getElementById('entries-header').style.display = 'none';
+                                document.getElementById('entries-content').innerHTML = '<p class="empty">Select a folder to view entries.</p>';
+                            }
+                        } else if (sel) {
+                            selectedFolder = sel;
+                        }
+                        renderFolders();
+                        if (cb) cb();
+                    });
+                });
+            })
+            .catch(function(err) {
+                showError('Failed to refresh folders: ' + err.message);
+                if (cb) cb();
+            });
+        }
+
+        // The open folder's object in the rebuilt tree, loading the listings
+        // of collapsed ancestors it hides behind; null if it no longer exists.
+        function resolveSelectedFolder(cb) {
+            if (!selectedFolder) { cb(null); return; }
+            var scope = selectedFolder.scope, path = folderPath(selectedFolder);
+            var parts = path.split('/');
+            var ancestors = [];
+            for (var i = 1; i < parts.length; i++) ancestors.push(parts.slice(0, i).join('/'));
+            var idx = 0;
+            (function next() {
+                if (idx >= ancestors.length) { cb(findFolder(scope, path)); return; }
+                var p = ancestors[idx++];
+                if (!findFolder(scope, p)) { cb(null); return; }
+                if (subfolderCache[folderKey(scope, p)]) next(); else loadSubfolders(scope, p, next);
+            })();
+        }
+
+        function livePoll() {
+            if (liveBusy) return;
+            // The baseline is taken whatever the tab's state, or a page loaded
+            // in a background tab would miss what changed before it was shown.
+            // After that a hidden tab does not poll, and a dialog may be
+            // editing what just changed: the poll waits for it, and the change
+            // is picked up once it closes.
+            if (liveVersion !== null && (document.hidden || document.querySelector('.modal-overlay.active'))) return;
+            liveBusy = true;
+            var url = '/api/addressbook/version' + (liveVersion === null ? '' : '?since=' + liveVersion);
+            fetch(url, { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(res) { return res.ok ? res.json() : null; })
+                .then(function(data) {
+                    if (!data || typeof data.version !== 'number') return;
+                    if (liveVersion === null) {
+                        // Baseline: the page is loading this version now.
+                        liveVersion = data.version;
+                        return;
+                    }
+                    if (data.version === liveVersion && data.changes) return;
+                    liveVersion = data.version;
+                    liveApply(livePlan(data.changes, liveView()));
+                })
+                .catch(function() {})
+                .then(function() { liveBusy = false; });
+        }
+        function startLiveRefresh() {
+            if (liveTimer) return;
+            livePoll();
+            liveTimer = setInterval(livePoll, LIVE_POLL_MS);
+            document.addEventListener('visibilitychange', function() { if (!document.hidden) livePoll(); });
+            window.addEventListener('focus', livePoll);
+        }
+
+        // ── Quick-find search ──────────────────────────────────────────────
+        // Index is fetched once after loadFolders() and after any mutation
+        // this page makes that already triggers a full reload. A change seen
+        // by the live refresh only marks it stale; it is rebuilt (quietly,
+        // without the "Indexing..." state that would blank the box
+        // mid-typing) the next time the box is focused or typed in. Search
+        // runs entirely client-side against the in-memory haystack.
+
+        function searchRow(scope, folderPathStr, e) {
+            var label = e.display_name || e.name;
+            var host = e.session_type === 'web' ? (e.url || '')
+                     : e.session_type === 'vdi' ? (e.container_image || '')
+                     : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
+                     : (e.hostname || '');
+            var haystack = [
+                e.name,
+                e.display_name || '',
+                host,
+                e.username || '',
+                e.proxmox_token_id || '',
+                e.url || '',
+                e.domain || '',
+                e.session_type,
+                folderPathStr
+            ].join(' ').toLowerCase();
+            return {
+                scope: scope,
+                folderPath: folderPathStr,
+                entry: e,
+                label: label,
+                host: host,
+                haystack: haystack
+            };
+        }
+
+        // Replace one folder's rows in the index with entries just read for
+        // it, so a folder re-read for the view keeps the index exact for free.
+        function indexPutFolder(scope, folderPathStr, entries) {
+            if (!searchIndex) return;
+            searchIndex = searchIndex.filter(function(r) {
+                return !(r.scope === scope && r.folderPath === folderPathStr);
+            });
+            (entries || []).forEach(function(e) { searchIndex.push(searchRow(scope, folderPathStr, e)); });
+        }
+
+        // Rebuild a stale index the moment search is used, not before.
+        function refreshSearchIndexIfStale() {
+            if (searchIndexStale && !searchIndexLoading) loadSearchIndex(true);
+        }
+
+        function loadSearchIndex(quiet) {
             var input = document.getElementById('connections-search');
             if (!input) return;
             searchIndexLoading = true;
-            input.placeholder = 'Indexing...';
-            input.disabled = true;
+            searchIndexStale = false;
+            if (!quiet) {
+                input.placeholder = 'Indexing...';
+                input.disabled = true;
+            }
             fetch('/api/addressbook/search-index', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
@@ -2236,33 +2541,7 @@
             })
             .then(function(data) {
                 var rows = (data && data.entries) || [];
-                searchIndex = rows.map(function(r) {
-                    var e = r.entry;
-                    var label = e.display_name || e.name;
-                    var host = e.session_type === 'web' ? (e.url || '')
-                             : e.session_type === 'vdi' ? (e.container_image || '')
-                             : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
-                             : (e.hostname || '');
-                    var haystack = [
-                        e.name,
-                        e.display_name || '',
-                        host,
-                        e.username || '',
-                        e.proxmox_token_id || '',
-                        e.url || '',
-                        e.domain || '',
-                        e.session_type,
-                        r.folder_path
-                    ].join(' ').toLowerCase();
-                    return {
-                        scope: r.scope,
-                        folderPath: r.folder_path,
-                        entry: e,
-                        label: label,
-                        host: host,
-                        haystack: haystack
-                    };
-                });
+                searchIndex = rows.map(function(r) { return searchRow(r.scope, r.folder_path, r.entry); });
                 searchIndexLoading = false;
                 input.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '... (press / )';
                 input.disabled = false;
@@ -2273,6 +2552,7 @@
             })
             .catch(function(err) {
                 searchIndexLoading = false;
+                searchIndexStale = true;
                 input.placeholder = 'Search unavailable';
                 input.disabled = false;
                 if (window.console) console.warn('Search index failed:', err.message);
@@ -2284,6 +2564,9 @@
             if (!input) return;
             var q = (input.value || '').trim().toLowerCase();
             searchQuery = q;
+            // Search is in use: a stale index is rebuilt now, and the results
+            // re-run against it when it lands; until then the old one serves.
+            if (q) refreshSearchIndexIfStale();
             if (!q) {
                 if (searchActive) {
                     searchActive = false;
@@ -2487,6 +2770,7 @@
                 currentEntries = entries;
                 folderEntries[cacheKey] = entries;
                 folderEntryCounts[cacheKey] = entries.length;
+                indexPutFolder(scope, folderPath, entries);
                 updateFolderCount(scope, folderPath, entries.length); // in-place badge update
                 renderEntries(entries, scope, folderPath);
             })
@@ -4624,6 +4908,7 @@
         var _searchInput = document.getElementById('connections-search');
         if (_searchInput) {
             _searchInput.addEventListener('input', runSearch);
+            _searchInput.addEventListener('focus', refreshSearchIndexIfStale);
             _searchInput.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
                     if (_searchInput.value) {

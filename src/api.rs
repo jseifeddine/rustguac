@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Extension, Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -2517,6 +2517,322 @@ pub async fn ab_list_subfolders(
     }
 }
 
+// ── Address book change log ──
+//
+// The Connections page keeps itself current by polling
+// `GET /api/addressbook/version?since=N` every few seconds. The answer comes
+// from this in-memory log and names the folders that changed since the
+// version the page last saw, so a page re-reads only what it shows: the
+// open folder when its entries changed, the folder list when a folder came
+// or went. The search index is never rebuilt on a poll; the page marks it
+// stale and walks the book again only when the box is next used. Per
+// change, an open tab therefore costs Vault at most one folder's entries
+// plus one folder-list listing, however many tabs are open; a poll costs
+// nothing.
+//
+// Changes are attributed from the request path (`ab_changes_for_request`).
+// Routes whose folders only the body knows (create folder, move, copy, bulk)
+// report them through an `AbChanged` response extension; should one not,
+// the change is logged as `all` and the page refreshes what it shows.
+//
+// Per-user credential variables (`/api/me/credentials`) are not address-book
+// changes and never touch this log: the tab that saved them reloads its own
+// credential status, and no other tab needs to know.
+//
+// The log is per process. A second rustguac on the same Vault, or a direct
+// Vault write, is not seen; those take a page reload, as they always did.
+
+/// What changed, as the Connections page needs to know it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AbChange {
+    /// "shared" or "instance"; "*" for `All`.
+    pub scope: String,
+    /// Folder path, `a/b` for a subfolder; empty for `All`.
+    pub folder: String,
+    pub kind: AbChangeKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AbChangeKind {
+    /// Entries in the folder were created, updated, deleted, moved or copied.
+    Entries,
+    /// The folder itself: created, deleted, or its config changed.
+    Tree,
+    /// Could not be attributed: the page refreshes everything it shows.
+    All,
+}
+
+impl AbChange {
+    pub fn entries(scope: &str, folder: &str) -> Self {
+        AbChange {
+            scope: scope.to_string(),
+            folder: folder.to_string(),
+            kind: AbChangeKind::Entries,
+        }
+    }
+    pub fn tree(scope: &str, folder: &str) -> Self {
+        AbChange {
+            scope: scope.to_string(),
+            folder: folder.to_string(),
+            kind: AbChangeKind::Tree,
+        }
+    }
+    pub fn all() -> Self {
+        AbChange {
+            scope: "*".to_string(),
+            folder: String::new(),
+            kind: AbChangeKind::All,
+        }
+    }
+}
+
+/// Response extension a handler sets to name the folders it changed when
+/// the request path alone does not say (the target of a move, the folder a
+/// POST created, every folder a bulk request touched).
+#[derive(Clone, Debug)]
+pub struct AbChanged(pub Vec<AbChange>);
+
+/// Attach the folders a handler changed to its response, for `ab_change_track`.
+fn with_ab_changes(mut response: Response, changes: Vec<AbChange>) -> Response {
+    response.extensions_mut().insert(AbChanged(changes));
+    response
+}
+
+/// How many individual changes the log keeps. A page that has not polled
+/// for longer than it takes to make this many changes gets `changes: null`
+/// and refreshes what it shows, so the bound on reads holds either way.
+const AB_CHANGE_LOG_LEN: usize = 512;
+
+/// The change log: a version counter and the recent changes behind it.
+#[derive(Clone, Default)]
+pub struct AddressBookChanges {
+    inner: Arc<std::sync::Mutex<AbChangeLog>>,
+}
+
+#[derive(Default)]
+struct AbChangeLog {
+    version: u64,
+    changed_at_ms: u64,
+    /// `(version, change)`, oldest first. One `record` call may push several
+    /// changes under the same version.
+    recent: std::collections::VecDeque<(u64, AbChange)>,
+    /// Lowest version every change of which is still in `recent`. Eviction
+    /// moves it past the version it evicted from, so a partially evicted
+    /// version is never reported as complete.
+    oldest_complete: u64,
+}
+
+/// Answer to `since`.
+pub struct AbChangesSince {
+    pub version: u64,
+    pub changed_at_ms: u64,
+    /// `None` when the log no longer reaches back to `since`.
+    pub changes: Option<Vec<AbChange>>,
+}
+
+impl AddressBookChanges {
+    /// Log a change set under one new version; returns that version.
+    pub fn record(&self, changes: Vec<AbChange>) -> u64 {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let mut log = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        log.version += 1;
+        log.changed_at_ms = now_ms;
+        let version = log.version;
+        if log.recent.is_empty() {
+            log.oldest_complete = version;
+        }
+        for change in changes {
+            if log.recent.len() >= AB_CHANGE_LOG_LEN {
+                if let Some((evicted, _)) = log.recent.pop_front() {
+                    log.oldest_complete = log.oldest_complete.max(evicted + 1);
+                }
+            }
+            log.recent.push_back((version, change));
+        }
+        version
+    }
+
+    /// Current version and timestamp (unix ms, 0 before the first change).
+    pub fn snapshot(&self) -> (u64, u64) {
+        let log = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        (log.version, log.changed_at_ms)
+    }
+
+    /// Everything logged after version `since`, deduplicated, or `None` if
+    /// the log has already dropped part of that range. `All` swallows the
+    /// rest: the page refreshes what it shows once.
+    pub fn since(&self, since: u64) -> AbChangesSince {
+        let log = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (version, changed_at_ms) = (log.version, log.changed_at_ms);
+        if since == version {
+            return AbChangesSince {
+                version,
+                changed_at_ms,
+                changes: Some(Vec::new()),
+            };
+        }
+        // Everything in (since, version] must still be in the log. A page
+        // ahead of the log saw a previous process: it refreshes too. With an
+        // empty log the only reachable case is `since == version`, above.
+        if since > version || log.recent.is_empty() || since + 1 < log.oldest_complete {
+            return AbChangesSince {
+                version,
+                changed_at_ms,
+                changes: None,
+            };
+        }
+        let mut out: Vec<AbChange> = Vec::new();
+        for (v, change) in log.recent.iter() {
+            if *v <= since {
+                continue;
+            }
+            if change.kind == AbChangeKind::All {
+                return AbChangesSince {
+                    version,
+                    changed_at_ms,
+                    changes: Some(vec![AbChange::all()]),
+                };
+            }
+            if !out.contains(change) {
+                out.push(change.clone());
+            }
+        }
+        AbChangesSince {
+            version,
+            changed_at_ms,
+            changes: Some(out),
+        }
+    }
+}
+
+/// The address-book changes a request implies, from its method and path.
+///
+/// `None`: not an address-book change (reads, connects, and everything
+/// outside `/api/addressbook`, `/api/me/credentials` included). Otherwise
+/// the changes the path names and whether that is all of them; when it is
+/// not, the handler reports the rest (`AbChanged`) or the change is logged
+/// as `All`. Folder segments arrive percent-encoded (`a%2Fb`) and are
+/// decoded here, as the routes would.
+pub fn ab_changes_for_request(
+    method: &axum::http::Method,
+    path: &str,
+) -> Option<(Vec<AbChange>, bool)> {
+    use axum::http::Method;
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return None;
+    }
+    let rest = path.strip_prefix("/api/addressbook")?;
+    let segs: Vec<String> = rest
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            urlencoding::decode(s)
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| s.to_string())
+        })
+        .collect();
+    let seg = |i: usize| segs.get(i).map(String::as_str);
+    match (seg(0), seg(1), seg(2), seg(3), seg(4), seg(5)) {
+        // POST /folders: the folder is in the body.
+        (Some("folders"), None, ..) => Some((Vec::new(), false)),
+        // POST /bulk: the folders are in the body.
+        (Some("bulk"), None, ..) => Some((Vec::new(), false)),
+        // PUT|DELETE /folders/{scope}/{folder}
+        (Some("folders"), Some(scope), Some(folder), None, ..) => {
+            Some((vec![AbChange::tree(scope, folder)], true))
+        }
+        // POST /folders/{scope}/{folder}/entries
+        (Some("folders"), Some(scope), Some(folder), Some("entries"), None, _) => {
+            Some((vec![AbChange::entries(scope, folder)], true))
+        }
+        // PUT|DELETE /folders/{scope}/{folder}/entries/{entry}
+        (Some("folders"), Some(scope), Some(folder), Some("entries"), Some(_), None) => {
+            Some((vec![AbChange::entries(scope, folder)], true))
+        }
+        // POST .../entries/{entry}/connect starts a session, changes nothing.
+        (Some("folders"), Some(_), Some(_), Some("entries"), Some(_), Some("connect")) => None,
+        // POST .../entries/{entry}/move|copy: the target is in the body.
+        (Some("folders"), Some(scope), Some(folder), Some("entries"), Some(_), Some(_)) => {
+            Some((vec![AbChange::entries(scope, folder)], false))
+        }
+        // Anything else that writes under the prefix: refresh everything
+        // rather than miss it.
+        _ => Some((Vec::new(), false)),
+    }
+}
+
+/// Middleware: log the address-book changes of every successful mutating
+/// request. Sits inside the auth layer, so only requests that were allowed
+/// to change anything get here.
+pub async fn ab_change_track(
+    changes: Option<Extension<AddressBookChanges>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let implied = ab_changes_for_request(request.method(), request.uri().path());
+    let response = next.run(request).await;
+    if let Some((mut found, mut complete)) = implied {
+        if response.status().is_success() {
+            if let Some(AbChanged(reported)) = response.extensions().get::<AbChanged>() {
+                found.extend(reported.iter().cloned());
+                complete = true;
+            }
+            if !complete {
+                found.push(AbChange::all());
+            }
+            if let Some(Extension(log)) = changes {
+                log.record(found);
+            }
+        }
+    }
+    response
+}
+
+#[derive(Deserialize, Default)]
+pub struct AbVersionQuery {
+    pub since: Option<u64>,
+}
+
+/// GET /api/addressbook/version?since=N — the change log since version N,
+/// answered from memory. Requires operator.
+pub async fn ab_version(
+    identity: Option<Extension<AuthIdentity>>,
+    changes: Option<Extension<AddressBookChanges>>,
+    Query(q): Query<AbVersionQuery>,
+) -> impl IntoResponse {
+    if !matches!(identity, Some(Extension(ref id)) if id.has_role("operator")) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "operator role required"})),
+        )
+            .into_response();
+    }
+    let Some(Extension(log)) = changes else {
+        return Json(json!({ "version": 0, "changed_at": 0, "changes": null })).into_response();
+    };
+    let answer = match q.since {
+        Some(since) => log.since(since),
+        None => {
+            let (version, changed_at_ms) = log.snapshot();
+            AbChangesSince {
+                version,
+                changed_at_ms,
+                changes: None,
+            }
+        }
+    };
+    Json(json!({
+        "version": answer.version,
+        "changed_at": answer.changed_at_ms,
+        "changes": answer.changes,
+    }))
+    .into_response()
+}
+
 /// GET /api/addressbook — Batch endpoint returning all visible folders with entries.
 /// Replaces the N+1 pattern of listing folders then entries per folder.
 pub async fn ab_list_all(
@@ -3203,7 +3519,10 @@ pub async fn ab_create_folder(
                 Some(&details),
             )
             .await;
-            (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+            with_ab_changes(
+                (StatusCode::CREATED, Json(json!({"ok": true}))).into_response(),
+                vec![AbChange::tree(&req.scope, &req.name)],
+            )
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -3717,7 +4036,13 @@ pub async fn ab_move_entry(
         Some(&details),
     )
     .await;
-    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+    with_ab_changes(
+        (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        vec![
+            AbChange::entries(&scope, &folder),
+            AbChange::entries(&req.target_scope, &req.target_folder),
+        ],
+    )
 }
 
 /// Most entries one bulk request may name.
@@ -4045,11 +4370,29 @@ pub async fn ab_bulk(
             *summary.entry(s.to_string()).or_default() += 1;
         }
     }
-    (
-        StatusCode::OK,
-        Json(json!({ "results": results, "summary": summary })),
+    // Every source folder and the target, for the change log; which of them
+    // actually changed is not worth a per-item account.
+    let mut touched: Vec<AbChange> = Vec::new();
+    for item in &req.items {
+        let c = AbChange::entries(&item.scope, &item.folder);
+        if !touched.contains(&c) {
+            touched.push(c);
+        }
+    }
+    if let Some(t) = &req.target {
+        let c = AbChange::entries(&t.scope, &t.folder);
+        if !touched.contains(&c) {
+            touched.push(c);
+        }
+    }
+    with_ab_changes(
+        (
+            StatusCode::OK,
+            Json(json!({ "results": results, "summary": summary })),
+        )
+            .into_response(),
+        touched,
     )
-        .into_response()
 }
 
 /// GET /api/addressbook/folder-paths
@@ -4142,7 +4485,13 @@ pub async fn ab_copy_entry(
         Some(&details),
     )
     .await;
-    (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+    with_ab_changes(
+        (StatusCode::CREATED, Json(json!({"ok": true}))).into_response(),
+        vec![
+            AbChange::entries(&scope, &folder),
+            AbChange::entries(&req.target_scope, &req.target_folder),
+        ],
+    )
 }
 
 /// DELETE /api/addressbook/folders/:scope/:folder/entries/:entry — Delete an entry. Admin only.
@@ -5778,6 +6127,246 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn address_book_change_attribution() {
+        use axum::http::Method;
+        let f = ab_changes_for_request;
+        // entries: create, update, delete; the folder segment is decoded
+        assert_eq!(
+            f(&Method::POST, "/api/addressbook/folders/shared/x/entries"),
+            Some((vec![AbChange::entries("shared", "x")], true))
+        );
+        assert_eq!(
+            f(
+                &Method::PUT,
+                "/api/addressbook/folders/shared/a%2Fb/entries/y"
+            ),
+            Some((vec![AbChange::entries("shared", "a/b")], true))
+        );
+        assert_eq!(
+            f(
+                &Method::DELETE,
+                "/api/addressbook/folders/instance/x/entries/y"
+            ),
+            Some((vec![AbChange::entries("instance", "x")], true))
+        );
+        // the folder itself
+        assert_eq!(
+            f(&Method::PUT, "/api/addressbook/folders/shared/a%2Fb"),
+            Some((vec![AbChange::tree("shared", "a/b")], true))
+        );
+        assert_eq!(
+            f(&Method::DELETE, "/api/addressbook/folders/shared/x"),
+            Some((vec![AbChange::tree("shared", "x")], true))
+        );
+        // the body knows the rest: the handler reports it
+        assert_eq!(
+            f(&Method::POST, "/api/addressbook/folders"),
+            Some((vec![], false))
+        );
+        assert_eq!(
+            f(&Method::POST, "/api/addressbook/bulk"),
+            Some((vec![], false))
+        );
+        assert_eq!(
+            f(
+                &Method::POST,
+                "/api/addressbook/folders/shared/x/entries/y/move"
+            ),
+            Some((vec![AbChange::entries("shared", "x")], false))
+        );
+        assert_eq!(
+            f(
+                &Method::POST,
+                "/api/addressbook/folders/shared/x/entries/y/copy"
+            ),
+            Some((vec![AbChange::entries("shared", "x")], false))
+        );
+        // reads and connects are not changes
+        assert_eq!(f(&Method::GET, "/api/addressbook"), None);
+        assert_eq!(f(&Method::GET, "/api/addressbook/version"), None);
+        assert_eq!(f(&Method::GET, "/api/addressbook/search-index"), None);
+        assert_eq!(
+            f(
+                &Method::POST,
+                "/api/addressbook/folders/shared/x/entries/y/connect"
+            ),
+            None
+        );
+        assert_eq!(f(&Method::POST, "/api/sessions"), None);
+        // a user's own credential variables are not an address-book change:
+        // saving them must not touch every other tab
+        assert_eq!(f(&Method::PUT, "/api/me/credentials"), None);
+        assert_eq!(f(&Method::GET, "/api/me/credentials"), None);
+    }
+
+    #[test]
+    fn address_book_change_log_since() {
+        let log = AddressBookChanges::default();
+        assert_eq!(log.snapshot(), (0, 0));
+        let s = log.since(0);
+        assert_eq!((s.version, s.changes), (0, Some(vec![])));
+
+        assert_eq!(log.record(vec![AbChange::entries("shared", "a")]), 1);
+        assert_eq!(log.record(vec![AbChange::entries("shared", "a")]), 2);
+        assert_eq!(
+            log.record(vec![
+                AbChange::tree("shared", "b"),
+                AbChange::entries("instance", "c"),
+            ]),
+            3
+        );
+        let (v, t) = log.snapshot();
+        assert_eq!(v, 3);
+        assert!(t > 1_600_000_000_000);
+
+        // everything since 0, repeats collapsed, order kept
+        let s = log.since(0);
+        assert_eq!(
+            s.changes,
+            Some(vec![
+                AbChange::entries("shared", "a"),
+                AbChange::tree("shared", "b"),
+                AbChange::entries("instance", "c"),
+            ])
+        );
+        // only what came after the version the page saw
+        assert_eq!(
+            log.since(2).changes,
+            Some(vec![
+                AbChange::tree("shared", "b"),
+                AbChange::entries("instance", "c"),
+            ])
+        );
+        assert_eq!(log.since(3).changes, Some(vec![]));
+        // a page ahead of the log saw a previous process: told to refresh,
+        // not that nothing moved, or it would wait for the count to catch up
+        assert_eq!(log.since(99).changes, None);
+
+        // an unattributed change swallows the rest
+        log.record(vec![AbChange::all()]);
+        assert_eq!(log.since(0).changes, Some(vec![AbChange::all()]));
+        assert_eq!(log.since(3).changes, Some(vec![AbChange::all()]));
+        assert_eq!(
+            log.since(4).changes,
+            Some(vec![]),
+            "the swallow applies only to what the page has not seen"
+        );
+    }
+
+    #[test]
+    fn address_book_change_log_forgets_the_oldest() {
+        let log = AddressBookChanges::default();
+        // Two changes per version: the ring then holds LEN/2 versions.
+        for i in 0..(AB_CHANGE_LOG_LEN as u64) {
+            log.record(vec![
+                AbChange::entries("shared", &format!("f{i}")),
+                AbChange::tree("shared", &format!("f{i}")),
+            ]);
+        }
+        let version = log.snapshot().0;
+        assert_eq!(version, AB_CHANGE_LOG_LEN as u64);
+        let oldest_kept = version - (AB_CHANGE_LOG_LEN as u64 / 2) + 1;
+        // Reachable: every version after `since` is still whole in the log.
+        assert!(log.since(oldest_kept - 1).changes.is_some());
+        assert_eq!(
+            log.since(oldest_kept - 1).changes.unwrap().len(),
+            AB_CHANGE_LOG_LEN
+        );
+        // One further back and part of the range is gone: say so, rather
+        // than hand the page a partial list it would trust.
+        assert!(log.since(oldest_kept - 2).changes.is_none());
+        assert!(log.since(0).changes.is_none());
+        // Still exact at the newest end.
+        assert_eq!(log.since(version - 1).changes.unwrap().len(), 2);
+    }
+
+    /// The middleware, on a router: what reaches the log for each kind of
+    /// request, and that a user's credential variables never do.
+    #[tokio::test]
+    async fn address_book_change_track_middleware() {
+        use axum::body::Body;
+        use axum::http::{Method, Request};
+        use axum::routing::{post, put};
+        use axum::Router;
+        use tower::ServiceExt;
+
+        let log = AddressBookChanges::default();
+        let app = Router::new()
+            .route("/api/me/credentials", put(|| async { "ok" }))
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
+                put(|| async { "ok" }),
+            )
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries",
+                post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "vault down") }),
+            )
+            .route(
+                "/api/addressbook/folders",
+                post(|| async {
+                    with_ab_changes(
+                        (StatusCode::CREATED, "ok").into_response(),
+                        vec![AbChange::tree("instance", "new/sub")],
+                    )
+                }),
+            )
+            .route("/api/addressbook/bulk", post(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(ab_change_track))
+            .layer(Extension(log.clone()));
+
+        let send = |method: Method, uri: &str| {
+            let app = app.clone();
+            let req = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+
+        // A user saving their own credential variables: nothing logged.
+        assert!(send(Method::PUT, "/api/me/credentials").await.is_success());
+        assert_eq!(log.snapshot().0, 0);
+
+        // An entry write: logged against its (decoded) folder.
+        assert!(send(
+            Method::PUT,
+            "/api/addressbook/folders/shared/a%2Fb/entries/host1"
+        )
+        .await
+        .is_success());
+        assert_eq!(log.snapshot().0, 1);
+        assert_eq!(
+            log.since(0).changes,
+            Some(vec![AbChange::entries("shared", "a/b")])
+        );
+
+        // A failed write changes nothing, so it is not logged.
+        assert_eq!(
+            send(Method::POST, "/api/addressbook/folders/shared/x/entries").await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(log.snapshot().0, 1);
+
+        // A handler that reports its folders: logged precisely, not as `all`.
+        assert!(send(Method::POST, "/api/addressbook/folders")
+            .await
+            .is_success());
+        assert_eq!(
+            log.since(1).changes,
+            Some(vec![AbChange::tree("instance", "new/sub")])
+        );
+
+        // A body-dependent route whose handler reports nothing: `all`, so
+        // the page refreshes rather than misses it.
+        assert!(send(Method::POST, "/api/addressbook/bulk")
+            .await
+            .is_success());
+        assert_eq!(log.since(2).changes, Some(vec![AbChange::all()]));
+        assert_eq!(log.snapshot().0, 3);
+    }
     use std::path::Path;
 
     #[test]

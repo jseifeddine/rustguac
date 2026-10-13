@@ -655,6 +655,25 @@ The response lists what happened to each entry, plus a count per outcome:
 
 `status` is one of `moved`, `copied`, `deleted`, `skipped`, `failed`, or `copied_not_removed` (a move whose copy was written but whose original could not be removed, so the entry is in both folders). A renamed copy also carries `new_name`. Every entry acted on is recorded in the address book audit log.
 
+### `GET /api/addressbook/version?since=N`
+
+The address book's change log, answered from memory: no Vault or disk read, so clients may poll it often. Requires **operator**. `version` counts every successful change made through this API to entries, folders and folder config (moves, copies and bulk operations included); `changed_at` is unix milliseconds, `0` before the first change since start. With `since`, `changes` lists what moved after that version, one row per folder: `kind` is `entries` (entries in the folder were written), `tree` (the folder itself was created, deleted or its config changed) or `all` (not attributable; refresh everything). It is `null` when `since` is omitted, when the log no longer reaches back that far (it keeps the last few hundred changes), or when the server restarted since, and the client should refresh what it shows once.
+
+A user's own credential variables (`/api/me/credentials`) are not address-book changes and never appear here. The log is per process: with several rustguac instances on one Vault, each sees only its own changes.
+
+The Connections page polls this every 3 seconds while visible and re-reads only the folder it shows, or the folder list when a folder came or went; its search index is rebuilt only when search is next used.
+
+```json
+{
+  "version": 17,
+  "changed_at": 1760155200000,
+  "changes": [
+    { "scope": "shared", "folder": "customers/acme", "kind": "entries" },
+    { "scope": "instance", "folder": "lab", "kind": "tree" }
+  ]
+}
+```
+
 ### `GET /api/addressbook/folder-paths` (admin)
 
 Every folder in both scopes, as `{ "folders": [{ "scope": "shared", "path": "servers/linux" }, ...] }`. Used to choose a target for bulk moves and copies.
