@@ -194,6 +194,15 @@
             .folder-actions strong { font-size: var(--fz-lg); }
             .folder-actions .desc { font-size: var(--fz-sm); }
         }
+        /* Folder modal: default credentials */
+        .fm-defaults { margin: var(--s-3) 0; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-2) var(--s-3); }
+        .fm-defaults summary { cursor: pointer; color: var(--text); font-size: var(--fz-md); }
+        .fm-defaults-table { width: 100%; border-collapse: collapse; margin-top: var(--s-2); }
+        .fm-defaults-table th { text-align: left; font-weight: normal; color: var(--text-muted); font-size: var(--fz-sm); padding: var(--s-1) var(--s-2) var(--s-1) 0; width: 3em; vertical-align: top; }
+        .fm-defaults-table td { padding: var(--s-1); vertical-align: top; }
+        .fm-defaults-table input, .fm-defaults-table textarea { width: 100%; margin: 0; font-size: var(--fz-sm); }
+        .fm-defaults-table textarea { min-height: var(--ctl-sm); resize: vertical; }
+        .fmd-clear-label { display: flex; align-items: center; gap: var(--s-1); font-size: var(--fz-xs); color: var(--text-dim); white-space: nowrap; padding-top: var(--s-2); }
 
         /* Active sessions strip */
         .active-sessions { margin-bottom: var(--s-5); }
@@ -667,6 +676,13 @@
                 Inherit permissions from parent folder
             </label>
             <div class="field-hint">When ticked, if this folder's own groups list doesn't grant a user access, the check walks up to the parent (and further ancestors if they also inherit). Uncheck to enforce this folder's groups list on its own. Top-level folders have no parent so this has no effect.</div>
+            <details class="fm-defaults" id="fm-defaults">
+                <summary>Default credentials</summary>
+                <div class="field-hint">Lent to entries in this folder that have no password or key of their own, per session type, so an entry created without secrets (a NetBox webhook, an import) connects straight away. An entry's own credentials always win; subfolders inherit per type, but not past a folder with "Inherit permissions from parent folder" unticked. A web entry's default password is typed into the page, where the user can read it. Secrets are write-only: leave a field blank to keep what is stored, tick clear to drop a type.</div>
+                <table class="fm-defaults-table">
+                    <tbody id="fm-defaults-rows"></tbody>
+                </table>
+            </details>
             <label>Scope
                 <select id="fm-scope">
                     <option value="shared">shared (all instances)</option>
@@ -2359,6 +2375,7 @@
                     ? highlight(e.proxmox_token_id || '', tokens)
                     : (e.username ? highlight(e.username, tokens) : '');
                 if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
+                if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
                 html += '<tr>';
                 html += '<td>' + highlight(r.label, tokens) + '</td>';
@@ -2632,6 +2649,7 @@
                     : (e.username ? escapeHtml(e.username) : '');
                 var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
                 if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
+                if (e.inherited_credentials) userCol += ' <span style="color:#888;font-size:0.8em" title="Uses the folder\'s default credentials">[folder]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
                 html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
@@ -3241,6 +3259,7 @@
             fmUsersLoaded = true;
             fmGroups = [];
             renderFmGroupChips();
+            renderFmDefaults({});
             loadKnownGroups(populateFmGroupOptions);
             document.getElementById('folder-modal').classList.add('active');
         }
@@ -3307,6 +3326,13 @@
                     fmUsersLoaded = true;
                 }
             }).catch(function() {});
+            renderFmDefaults({});
+            fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath) + '/defaults', {
+                headers: apiHeaders(),
+                credentials: 'same-origin'
+            }).then(function(res) { return res.ok ? res.json() : null; })
+              .then(function(data) { if (data && data.defaults) renderFmDefaults(data.defaults); })
+              .catch(function() {});
 
             document.getElementById('folder-modal').classList.add('active');
         });
@@ -3349,6 +3375,64 @@
             });
         })();
 
+        // ── Folder default credentials (admin) ──
+        var FM_DEFAULT_TYPES = ['ssh', 'rdp', 'vnc', 'web'];
+        var fmDefaultsLoaded = {};   // type -> {username, domain, has_password, has_private_key}
+        function renderFmDefaults(summary) {
+            fmDefaultsLoaded = summary || {};
+            var rows = document.getElementById('fm-defaults-rows');
+            rows.innerHTML = '';
+            var any = false;
+            FM_DEFAULT_TYPES.forEach(function(t) {
+                var d = fmDefaultsLoaded[t];
+                if (d) any = true;
+                rows.insertAdjacentHTML('beforeend',
+                    '<tr data-type="' + t + '"><th>' + t + '</th>' +
+                    '<td><input class="fmd-user" placeholder="username" autocomplete="off" value="' + escapeAttr((d && d.username) || '') + '"></td>' +
+                    '<td><input type="password" class="fmd-pass" autocomplete="new-password" placeholder="' + (d && d.has_password ? '(stored)' : 'password') + '"></td>' +
+                    '<td>' + (t === 'ssh'
+                        ? '<textarea class="fmd-key" rows="1" spellcheck="false" placeholder="' + (d && d.has_private_key ? '(stored)' : 'private key') + '"></textarea>'
+                        : '') + '</td>' +
+                    '<td><label class="fmd-clear-label"><input type="checkbox" class="fmd-clear"> clear</label></td></tr>');
+            });
+            document.getElementById('fm-defaults').open = any;
+        }
+        // The PUT body: only what changed. A ticked clear sends null for the
+        // type; a typed secret sets it; a changed username sets it (empty
+        // clears). Nothing typed means no request at all.
+        function fmDefaultsPatch() {
+            var patch = {};
+            document.querySelectorAll('#fm-defaults-rows tr').forEach(function(tr) {
+                var t = tr.getAttribute('data-type');
+                var d = fmDefaultsLoaded[t];
+                if (tr.querySelector('.fmd-clear').checked) {
+                    if (d) patch[t] = null;
+                    return;
+                }
+                var part = {};
+                var user = tr.querySelector('.fmd-user').value.trim();
+                if (user !== ((d && d.username) || '')) part.username = user;
+                var pass = tr.querySelector('.fmd-pass').value;
+                if (pass) part.password = pass;
+                var keyEl = tr.querySelector('.fmd-key');
+                if (keyEl && keyEl.value.trim()) part.private_key = keyEl.value.trim();
+                if (Object.keys(part).length) patch[t] = part;
+            });
+            return patch;
+        }
+        function saveFmDefaults(scope, path) {
+            var patch = fmDefaultsPatch();
+            if (!Object.keys(patch).length) return Promise.resolve();
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(path) + '/defaults', {
+                method: 'PUT',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(patch)
+            }).then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error('Default credentials: ' + t); });
+            });
+        }
+
         document.getElementById('fm-save').addEventListener('click', function() {
             var name = document.getElementById('fm-name').value.trim();
             var desc = document.getElementById('fm-desc').value.trim();
@@ -3383,6 +3467,9 @@
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                    return saveFmDefaults(folderEditMode.scope, folderEditMode.path || folderEditMode.name);
+                })
+                .then(function() {
                     document.getElementById('folder-modal').classList.remove('active');
                     // Update selected folder description
                     if (selectedFolder) selectedFolder.description = desc;
@@ -3401,6 +3488,9 @@
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                    return saveFmDefaults(postScope, fullPath);
+                })
+                .then(function() {
                     document.getElementById('folder-modal').classList.remove('active');
                     if (subfolderParent) {
                         // Expand parent so the new child shows, then invalidate cache and reload.

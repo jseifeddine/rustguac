@@ -1296,6 +1296,18 @@ async fn run_server(config: Config, database: Db) {
             get(api::ab_list_subfolders),
         )
         .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            get(api::ab_get_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            put(api::ab_put_folder_defaults),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/defaults",
+            delete(api::ab_delete_folder_defaults),
+        )
+        .route(
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(api::ab_list_entries),
         )

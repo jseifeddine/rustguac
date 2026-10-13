@@ -6,9 +6,11 @@
 //! rewrite: reading `scope=shared, folder=Foo, entry=Bar` from the source and
 //! writing it back with the same coordinates maps `<src_base>/shared/Foo/Bar`
 //! to `<dst_base>/shared/Foo/Bar`, each client applying its own mount /
-//! base_path / instance_name. Entries AND the `.config` sentinel at every
-//! folder level are copied (the latter carries allowed_groups /
-//! inherit_from_parent — dropping it would silently lose a folder's ACL).
+//! base_path / instance_name. Entries AND the `.config` and `.defaults`
+//! sentinels at every folder level are copied (`.config` carries
+//! allowed_groups / inherit_from_parent, `.defaults` the folder's default
+//! credentials — dropping either would silently lose a folder's ACL or leave
+//! its entries unable to connect).
 
 use std::sync::Arc;
 
@@ -91,6 +93,22 @@ pub async fn cmd_vault_migrate(
             }
             Err(VaultError::NotFound) => {}
             Err(e) => eprintln!("  Warning: read .config for '{}' failed: {}", path, e),
+        }
+
+        // Copy the folder's .defaults sentinel (if any): the default
+        // credentials its entries borrow. Without it, entries that connect
+        // on the source would prompt on the destination.
+        match src.get_folder_defaults(scope, path).await {
+            Ok(defaults) => {
+                if dry_run {
+                    println!("  [defaults] {}", path);
+                } else if let Err(e) = dst.put_folder_defaults(scope, path, &defaults).await {
+                    eprintln!("  Warning: write .defaults for '{}' failed: {}", path, e);
+                    failures += 1;
+                }
+            }
+            Err(VaultError::NotFound) => {}
+            Err(e) => eprintln!("  Warning: read .defaults for '{}' failed: {}", path, e),
         }
 
         // Copy entries.

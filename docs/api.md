@@ -38,7 +38,7 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 
 When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
 
-If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
+If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored). An entry without its own secret that is covered by [folder default credentials](credential-variables.md#folder-default-credentials) connects with those, exactly as it does from the Connections page.
 
 See [NetBox Integration](netbox.md) for usage with NetBox Custom Links.
 
@@ -596,6 +596,40 @@ For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed u
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
 Update a connection entry. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+
+### `GET /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+The folder's default credentials, secrets stripped. These are lent to entries in the folder (and in subfolders without their own, per session type, up to but not past a subfolder with `inherit_from_parent: false`) that have no password or private key of their own, so an entry created without secrets by a webhook or an import is connectable the moment it exists. An entry's own credentials always win, and an entry set to `prompt_credentials` still prompts. See [Folder default credentials](credential-variables.md#folder-default-credentials) for the storage layout, the inheritance rule and the note on web entries.
+
+```json
+{
+  "defaults": {
+    "ssh": { "username": "root", "domain": null, "has_password": false, "has_private_key": true },
+    "web": { "username": null, "domain": null, "has_password": true, "has_private_key": false }
+  }
+}
+```
+
+Entries covered by folder defaults list with `has_credentials: true` and `inherited_credentials: true`.
+
+### `PUT /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+Set default credentials per session type. Types not mentioned keep what is stored; `null` removes a type. Within a type an omitted field keeps the stored value and `""` clears it, the same rule entry PUTs use for secrets.
+
+```json
+{
+  "ssh": { "username": "root", "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..." },
+  "web": { "password": "router-password" },
+  "rdp": null
+}
+```
+
+Returns the same summary as `GET`. A type left with nothing in it is dropped; a folder left with no types loses its defaults entirely. Audited as `update_folder_defaults`.
+
+### `DELETE /api/addressbook/folders/:scope/:folder/defaults` (admin)
+
+Remove the folder's default credentials. Returns `204`.
+
 
 ### `DELETE /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 

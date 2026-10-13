@@ -151,6 +151,8 @@ Because folder settings live in Vault, they apply on every rustguac instance sha
 
 A subfolder created with `inherit_from_parent: true` (the default for new subfolders) grants access to anyone who can access its parent. A subfolder with `inherit_from_parent: false` is gated solely by its own `allowed_groups` and `allowed_users`, independent of the parent.
 
+The same flag bounds [folder default credentials](credential-variables.md#folder-default-credentials): defaults set on a parent do not flow into a subfolder with `inherit_from_parent: false`, so isolating a folder for access also keeps the parent's secrets out of it.
+
 ### Examples
 
 A folder with `allowed_groups: ["engineering", "devops"]`:

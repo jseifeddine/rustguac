@@ -59,6 +59,7 @@ Vault KV v2 path structure:
 - `<base_path>/shared/<folder>/<entry>` — shared across all instances
 - `<base_path>/instance/<name>/<folder>/<entry>` — instance-specific
 - `<folder>/.config` — folder metadata: `{"allowed_groups":["group1"], "description":"..."}`
+- `<folder>/.defaults` — default credentials per session type, lent to entries without their own; subfolders inherit them up to (not past) a folder with `inherit_from_parent: false`
 - `<base_path>/users/<sanitized_email>` — per-user credential variables
 
 #### Multiple Vault backends (DR)

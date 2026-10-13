@@ -170,7 +170,8 @@ scopes and want to move a scope onto a dedicated Vault (see
 copies a scope's whole subtree between two configured backends. Because the
 scope-to-path layout is identical in every backend, this is a same-identity
 copy, not a rewrite: it moves the entries **and** each folder's access config
-(`.config`), so `allowed_groups` and inheritance travel with them.
+(`.config`) and default credentials (`.defaults`), so `allowed_groups`,
+inheritance and the credentials entries borrow all travel with them.
 
 ## Step 1: Preview
 

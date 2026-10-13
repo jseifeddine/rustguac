@@ -3,7 +3,7 @@
 use crate::auth::{self, client_ip, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::session::{CreateSessionRequest, SessionManager, SessionType};
-use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
+use crate::vault::{AddressBookEntry, DefaultsSource, FolderConfig, VaultClient, VaultError};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
@@ -2193,6 +2193,51 @@ impl VaultBackends {
             .await
     }
 
+    pub async fn get_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<crate::vault::FolderDefaults, VaultError> {
+        self.scoped(scope)
+            .await?
+            .get_folder_defaults(scope, folder)
+            .await
+    }
+
+    pub async fn put_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+        defaults: &crate::vault::FolderDefaults,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .put_folder_defaults(scope, folder, defaults)
+            .await
+    }
+
+    pub async fn delete_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .delete_folder_defaults(scope, folder)
+            .await
+    }
+
+    pub async fn effective_folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+        self.scoped(scope)
+            .await?
+            .effective_folder_defaults(scope, folder)
+            .await
+    }
+
     pub async fn delete_folder(
         &self,
         scope: &str,
@@ -2320,6 +2365,28 @@ impl VaultBackends {
             return Err(VaultError::Unavailable);
         }
         Ok((folders, unavailable))
+    }
+}
+
+/// The defaults walk over the multi-backend router: each read goes to the
+/// backend that serves the scope, like every other folder read here.
+impl DefaultsSource for VaultBackends {
+    async fn folder_defaults(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+        self.scoped(scope)
+            .await?
+            .folder_defaults(scope, folder)
+            .await
+    }
+
+    async fn inherits_from_parent(&self, scope: &str, folder: &str) -> Result<bool, VaultError> {
+        self.scoped(scope)
+            .await?
+            .inherits_from_parent(scope, folder)
+            .await
     }
 }
 
@@ -2517,6 +2584,258 @@ pub async fn ab_list_subfolders(
     }
 }
 
+// ── Folder default credentials ──
+
+/// Which default credentials a folder lends, without the secrets.
+fn folder_defaults_summary(d: &crate::vault::FolderDefaults) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (session_type, c) in d {
+        out.insert(
+            session_type.clone(),
+            json!({
+                "username": c.username,
+                "domain": c.domain,
+                "has_password": c.password.as_deref().is_some_and(|p| !p.is_empty()),
+                "has_private_key": c.private_key.as_deref().is_some_and(|k| !k.is_empty()),
+            }),
+        );
+    }
+    serde_json::Value::Object(out)
+}
+
+/// GET /api/addressbook/folders/:scope/:folder/defaults — admin only. The
+/// folder's own `.defaults` (not what it inherits), secrets stripped.
+pub async fn ab_get_folder_defaults(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !matches!(identity, Some(Extension(ref id)) if id.has_role("admin")) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin role required"})),
+        )
+            .into_response();
+    }
+    match vault.get_folder_defaults(&scope, &folder).await {
+        Ok(d) => Json(json!({ "defaults": folder_defaults_summary(&d) })).into_response(),
+        Err(VaultError::NotFound) => Json(json!({ "defaults": {} })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// One session type's part of a `PUT .../defaults` body. An omitted field
+/// keeps what is stored, an empty string clears it; the same rule as entry
+/// PUTs use for their secrets.
+#[derive(Deserialize, Default)]
+pub struct DefaultCredentialsPatch {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub private_key: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+/// PUT /api/addressbook/folders/:scope/:folder/defaults — admin only.
+///
+/// Body: `{ "<session type>": { username?, password?, private_key?, domain? } | null, ... }`.
+/// Types not mentioned keep what is stored; `null` removes a type. Within a
+/// type an omitted secret keeps the stored one and `""` clears it. A type
+/// left with nothing in it is dropped; a folder left with no types loses its
+/// `.defaults` key.
+#[allow(clippy::too_many_arguments)]
+pub async fn ab_put_folder_defaults(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+    Json(patch): Json<std::collections::BTreeMap<String, Option<DefaultCredentialsPatch>>>,
+) -> impl IntoResponse {
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
+
+    for session_type in patch.keys() {
+        let ok = !session_type.is_empty()
+            && session_type.len() <= 32
+            && session_type
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        if !ok {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid session type key {:?}", session_type)})),
+            )
+                .into_response();
+        }
+    }
+
+    let mut current = match vault.get_folder_defaults(&scope, &folder).await {
+        Ok(d) => d,
+        Err(VaultError::NotFound) => crate::vault::FolderDefaults::new(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+
+    fn non_empty(v: String) -> Option<String> {
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
+    for (session_type, part) in patch {
+        match part {
+            None => {
+                current.remove(&session_type);
+            }
+            Some(p) => {
+                let c = current.entry(session_type).or_default();
+                if let Some(u) = p.username {
+                    c.username = non_empty(u);
+                }
+                if let Some(d) = p.domain {
+                    c.domain = non_empty(d);
+                }
+                if let Some(pw) = p.password {
+                    c.password = non_empty(pw);
+                }
+                if let Some(k) = p.private_key {
+                    c.private_key = non_empty(k);
+                }
+            }
+        }
+    }
+    current.retain(|_, c| c.username.is_some() || c.domain.is_some() || c.has_secret());
+
+    match vault.put_folder_defaults(&scope, &folder, &current).await {
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            let details = json!({ "types": current.keys().collect::<Vec<_>>() }).to_string();
+            log_ab_event(
+                &database,
+                &admin_email,
+                "update_folder_defaults",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                Some(&details),
+            )
+            .await;
+            Json(json!({ "ok": true, "defaults": folder_defaults_summary(&current) }))
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/addressbook/folders/:scope/:folder/defaults — admin only.
+pub async fn ab_delete_folder_defaults(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Extension(vault): Extension<VaultState>,
+    Path((scope, folder)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "admin role required"})),
+            )
+                .into_response()
+        }
+    };
+    match vault.delete_folder_defaults(&scope, &folder).await {
+        Ok(()) => {
+            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+            log_ab_event(
+                &database,
+                &admin_email,
+                "delete_folder_defaults",
+                &scope,
+                &folder,
+                None,
+                &ip,
+                None,
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// Lend an entry without credentials of its own the folder defaults for its
+/// session type: the nearest folder on the path wins per type, and the walk
+/// stops at a folder with `inherit_from_parent: false` (see
+/// `crate::vault::resolve_effective_defaults`). This is the one place the
+/// Connections connect endpoint and `/api/connect` quick links resolve
+/// defaults, so an entry behaves the same from either. An entry with its own
+/// secret, or set to prompt, is returned untouched; a Vault error leaves it
+/// as it was, and the caller then prompts as it did before defaults existed.
+async fn lend_folder_defaults<S: DefaultsSource>(
+    src: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    mut ab_entry: AddressBookEntry,
+) -> AddressBookEntry {
+    if !crate::vault::entry_takes_folder_defaults(&ab_entry) {
+        return ab_entry;
+    }
+    match crate::vault::resolve_effective_defaults(src, scope, folder).await {
+        Ok(Some(d)) => {
+            if crate::vault::apply_folder_defaults(&mut ab_entry, &d) {
+                tracing::debug!(
+                    scope,
+                    folder,
+                    entry,
+                    "entry using folder default credentials"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!("Failed to read folder defaults from Vault: {}", err),
+    }
+    ab_entry
+}
+
 /// GET /api/addressbook — Batch endpoint returning all visible folders with entries.
 /// Replaces the N+1 pattern of listing folders then entries per folder.
 pub async fn ab_list_all(
@@ -2583,10 +2902,17 @@ pub async fn ab_list_all(
             .list_entries(&folder.scope, &folder.name)
             .await
             .unwrap_or_default();
+        let defaults = vault
+            .effective_folder_defaults(&folder.scope, &folder.name)
+            .await
+            .ok()
+            .flatten();
         let mut entries = Vec::new();
         for name in &entry_names {
             if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
-                entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+                info.apply_inherited(&entry, defaults.as_ref());
+                entries.push(info);
             }
         }
 
@@ -2674,12 +3000,19 @@ pub async fn ab_search_index(
             Ok(n) => n,
             Err(_) => continue,
         };
+        let defaults = vault
+            .effective_folder_defaults(&scope, &path)
+            .await
+            .ok()
+            .flatten();
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
+                let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+                info.apply_inherited(&entry, defaults.as_ref());
                 emitted.push(json!({
                     "scope": scope,
                     "folder_path": path,
-                    "entry": crate::vault::EntryInfo::from((name.as_str(), &entry)),
+                    "entry": info,
                 }));
             }
         }
@@ -2722,10 +3055,17 @@ pub async fn ab_list_entries(
     };
 
     // Fetch each entry and strip credentials
+    let defaults = vault
+        .effective_folder_defaults(&scope, &folder)
+        .await
+        .ok()
+        .flatten();
     let mut entries = Vec::new();
     for name in &entry_names {
         if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
-            entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+            let mut info = crate::vault::EntryInfo::from((name.as_str(), &entry));
+            info.apply_inherited(&entry, defaults.as_ref());
+            entries.push(info);
         }
     }
 
@@ -2874,6 +3214,8 @@ pub async fn ab_connect_entry(
                 .into_response()
         }
     };
+
+    let ab_entry = lend_folder_defaults(vault.as_ref(), &scope, &folder, &entry, ab_entry).await;
 
     // Resolve credential variable references ($domain_user, $domain_password, etc.)
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
@@ -5355,6 +5697,10 @@ pub async fn quick_connect(
             }
         };
 
+        // Same folder defaults as the Connections connect endpoint, so an
+        // entry that works from the page works from a link too.
+        let ab_entry = lend_folder_defaults(vault.as_ref(), scope, folder, entry, ab_entry).await;
+
         // Resolve credential variable references
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
             let user_email = match &id {
@@ -5875,6 +6221,111 @@ mod tests {
 
     fn sp(a: &str, b: &str) -> (String, String) {
         (a.to_string(), b.to_string())
+    }
+
+    // ── Folder default credentials: the one resolver both connect paths use
+    // (the Connections endpoint and /api/connect quick links). ──
+    struct FakeDefaultsSource {
+        defaults: std::collections::HashMap<String, crate::vault::FolderDefaults>,
+        inherit: std::collections::HashSet<String>,
+    }
+    impl DefaultsSource for FakeDefaultsSource {
+        async fn folder_defaults(
+            &self,
+            _scope: &str,
+            folder: &str,
+        ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+            Ok(self.defaults.get(folder).cloned())
+        }
+        async fn inherits_from_parent(
+            &self,
+            _scope: &str,
+            folder: &str,
+        ) -> Result<bool, VaultError> {
+            Ok(self.inherit.contains(folder))
+        }
+    }
+
+    fn defaults_with_ssh_key(key: &str) -> crate::vault::FolderDefaults {
+        let mut d = crate::vault::FolderDefaults::new();
+        d.insert(
+            "ssh".into(),
+            crate::vault::DefaultCredentials {
+                username: Some("root".into()),
+                private_key: Some(key.into()),
+                ..Default::default()
+            },
+        );
+        d
+    }
+
+    #[tokio::test]
+    async fn lend_folder_defaults_fills_a_bare_entry_and_respects_the_boundary() {
+        let src = FakeDefaultsSource {
+            defaults: [("corp".to_string(), defaults_with_ssh_key("corp-key"))]
+                .into_iter()
+                .collect(),
+            inherit: ["corp/linux"].into_iter().map(String::from).collect(),
+        };
+        let bare = || AddressBookEntry {
+            session_type: "ssh".into(),
+            hostname: Some("10.0.0.1".into()),
+            ..Default::default()
+        };
+
+        // a subfolder that inherits gets corp's key and username
+        let e = lend_folder_defaults(&src, "shared", "corp/linux", "box", bare()).await;
+        assert_eq!(e.private_key.as_deref(), Some("corp-key"));
+        assert_eq!(e.username.as_deref(), Some("root"));
+
+        // an isolated subfolder (inherit_from_parent: false) does not
+        let e = lend_folder_defaults(&src, "shared", "corp/guests", "box", bare()).await;
+        assert!(e.private_key.is_none() && e.username.is_none());
+
+        // the entry's own secret and username win
+        let own = AddressBookEntry {
+            password: Some("own".into()),
+            username: Some("admin".into()),
+            ..bare()
+        };
+        let e = lend_folder_defaults(&src, "shared", "corp/linux", "box", own).await;
+        assert_eq!(e.password.as_deref(), Some("own"));
+        assert_eq!(e.username.as_deref(), Some("admin"));
+        assert!(e.private_key.is_none());
+
+        // an entry set to prompt is left to prompt
+        let prompting = AddressBookEntry {
+            prompt_credentials: Some(true),
+            ..bare()
+        };
+        let e = lend_folder_defaults(&src, "shared", "corp/linux", "box", prompting).await;
+        assert!(e.private_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn lend_folder_defaults_leaves_the_entry_alone_when_vault_fails() {
+        struct Down;
+        impl DefaultsSource for Down {
+            async fn folder_defaults(
+                &self,
+                _s: &str,
+                _f: &str,
+            ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+                Err(VaultError::Forbidden)
+            }
+            async fn inherits_from_parent(&self, _s: &str, _f: &str) -> Result<bool, VaultError> {
+                Err(VaultError::Forbidden)
+            }
+        }
+        let e = AddressBookEntry {
+            session_type: "ssh".into(),
+            username: Some("admin".into()),
+            ..Default::default()
+        };
+        let out = lend_folder_defaults(&Down, "shared", "corp/linux", "box", e).await;
+        // a failed read must not change the entry
+        assert_eq!(out.username.as_deref(), Some("admin"));
+        assert!(out.password.is_none() && out.private_key.is_none());
     }
 
     #[tokio::test]
