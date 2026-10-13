@@ -25,6 +25,7 @@ One spec per change, named after the branch that introduced it:
 |---|---|
 | `tables-1710` | #252: no horizontal overflow at 1710px on Connections, Recordings and Reports, with short and with long unbreakable names |
 | `connections-sidebar` | #254: independent sidebar scroll, selected row marked and kept in view |
+| `connections-folder-filter` | #254: live filter box, ARIA tree, arrow keys, `f` shortcut |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
