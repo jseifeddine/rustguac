@@ -25,6 +25,7 @@ One spec per change, named after the branch that introduced it:
 |---|---|
 | `tables-1710` | #252: no horizontal overflow at 1710px on Connections, Recordings and Reports, with short and with long unbreakable names |
 | `connections-app-shell` | #254: clipped body, two scroll panes, folder change scrolls the pane not the page |
+| `role-nav` | one nav on every page, gated by `data-role-level` |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
