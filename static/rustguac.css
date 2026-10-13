@@ -363,6 +363,8 @@ tbody tr:last-child td { border-bottom: none; }
     padding-bottom: var(--s-2);
     border-bottom: 1px solid var(--border);
 }
+/* A section's action button sits on the right of its heading band. */
+.section-head .section-action { margin-left: auto; align-self: center; }
 .section-head strong {
     color: var(--accent);
     font-size: var(--fz-sm);

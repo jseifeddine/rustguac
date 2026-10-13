@@ -24,6 +24,7 @@ One spec per change, named after the branch that introduced it:
 | spec | pins |
 |---|---|
 | `tables-1710` | #252: no horizontal overflow at 1710px on Connections, Recordings and Reports, with short and with long unbreakable names |
+| `sessions-adhoc-modal` | ad-hoc form opens as a modal |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.
