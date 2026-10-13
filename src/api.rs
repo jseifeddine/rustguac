@@ -2749,6 +2749,13 @@ pub struct ConnectRequest {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// The screen's size in CSS pixels. An entry that opens fullscreen on
+    /// connect is created at this size instead of the window's, so nothing
+    /// has to be resized once the fullscreen transition lands.
+    #[serde(default)]
+    pub screen_width: Option<u32>,
+    #[serde(default)]
+    pub screen_height: Option<u32>,
     #[serde(default)]
     pub dpi: Option<u32>,
     #[serde(default)]
@@ -2838,6 +2845,62 @@ pub async fn ssh_probe_host_key(
 pub struct ProbeHostKeyRequest {
     pub hostname: String,
     pub port: Option<u16>,
+}
+
+/// The size a new session is created at.
+///
+/// A bitmap (RDP/VNC) entry that opens fullscreen on connect is created at
+/// the screen's size, which is the size it will have once fullscreen lands.
+/// Until the client's fullscreen gesture fires it scales that picture to fit
+/// the window, so the desktop is painted once at its final size and the
+/// fullscreen transition brings no resize, no decoder rebuild and no second
+/// repaint (#257). Everything else keeps the window's size: a terminal
+/// reflows to fullscreen instantly.
+///
+/// Both sizes are CSS pixels, which is what the client's post-connect size
+/// send uses today, so creation and that send agree. When #238 lands
+/// (native/HiDPI resolution, `display_scale`), that send becomes the
+/// device-pixel size, and the mod-16 rounding below must then be applied to
+/// the final size after the devicePixelRatio multiply, not to the CSS size.
+pub fn initial_session_size(
+    session_type: &str,
+    fullscreen_on_connect: bool,
+    window: (Option<u32>, Option<u32>),
+    screen: (Option<u32>, Option<u32>),
+) -> (Option<u32>, Option<u32>) {
+    let bitmap = matches!(session_type, "rdp" | "vnc");
+    let (w, h) = match (bitmap && fullscreen_on_connect, screen) {
+        (true, (Some(w), Some(h))) if w > 0 && h > 0 => (Some(w), Some(h)),
+        _ => window,
+    };
+    // RDP's display channel rounds every requested size down to a multiple
+    // of 16 (patches/007, which prevents the H.264 green band), so the
+    // client's first post-connect size send always lands on that grid.
+    // Create the session there already, fullscreen or windowed, so the two
+    // match: guacd coalesces them and there is no resize, the H.264 decoder
+    // is not rebuilt and the picture never flashes on connect (#257). VNC
+    // has no such rounding, so it keeps the exact size.
+    //
+    // #238 (not merged at the time of writing): once the session is created
+    // at the device-pixel size, round that size, i.e. apply round_down_mod16
+    // after multiplying by devicePixelRatio, since rounding the CSS size and
+    // then scaling it would leave the grid again.
+    if session_type == "rdp" {
+        (w.map(round_down_mod16), h.map(round_down_mod16))
+    } else {
+        (w, h)
+    }
+}
+
+/// Round a dimension down to a multiple of 16, with a 16px floor so a tiny
+/// screen never rounds to zero. Mirrors guacd's RDP display-channel rounding.
+fn round_down_mod16(v: u32) -> u32 {
+    let r = v - (v % 16);
+    if r < 16 {
+        16
+    } else {
+        r
+    }
 }
 
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
@@ -2942,6 +3005,12 @@ pub async fn ab_connect_entry(
     // Build CreateSessionRequest from the Vault entry + connect request display params.
     // ConnectRequest credentials override address book values (for prompted credentials).
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    let (initial_width, initial_height) = initial_session_size(
+        &ab_entry.session_type,
+        ab_entry.fullscreen_on_connect.unwrap_or(false),
+        (req.width, req.height),
+        (req.screen_width, req.screen_height),
+    );
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
@@ -2965,8 +3034,8 @@ pub async fn ab_connect_entry(
         jump_username: None,
         jump_password: None,
         jump_private_key: None,
-        width: req.width,
-        height: req.height,
+        width: initial_width,
+        height: initial_height,
         dpi: req.dpi,
         banner: req.banner.or(ab_entry.banner),
         enable_drive: ab_entry.enable_drive,
@@ -2975,7 +3044,7 @@ pub async fn ab_connect_entry(
         remote_app_args: ab_entry.remote_app_args,
         enable_recording: ab_entry.enable_recording,
         record_typescript: ab_entry.record_typescript,
-        address_book_entry: Some(ab_entry_key),
+        address_book_entry: Some(ab_entry_key.clone()),
         address_book_folder: Some(folder.to_string()),
         entry_display_name: ab_entry.display_name.clone(),
         max_recordings: ab_entry.max_recordings,
@@ -3035,6 +3104,28 @@ pub async fn ab_connect_entry(
         scope = %scope,
         "Address book connect requested"
     );
+
+    // Reuse a Pending session this user already opened for this entry rather
+    // than spawning a duplicate (e.g. a repeat Connect click). Matched on the
+    // fully built request above, credentials included: a retry with a
+    // different password, key or domain (a mistyped prompt) must not get
+    // the old Pending session, which still holds the old credentials. The
+    // fingerprint is a hash, compared only, never logged.
+    if let Some(existing) = manager
+        .find_reusable_session(
+            &admin_name,
+            &ab_entry_key,
+            &create_req.credential_fingerprint(),
+        )
+        .await
+    {
+        tracing::info!(
+            user = %admin_name,
+            session_id = %existing.session_id,
+            "Reusing existing address book session"
+        );
+        return (StatusCode::CREATED, Json(json!(existing))).into_response();
+    }
 
     match manager.create_session(create_req, admin_name.clone()).await {
         Ok(info) => {
@@ -5797,6 +5888,53 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn fullscreen_sizing_applies_to_bitmap_sessions_only() {
+        let win = (Some(1710), Some(954));
+        let scr = (Some(1710), Some(1112));
+        // RDP opening fullscreen: created at the screen size rounded down to
+        // a multiple of 16, matching guacd's display-channel rounding so there
+        // is no post-connect resize (#257). VNC is not mod-16 rounded.
+        assert_eq!(
+            initial_session_size("rdp", true, win, scr),
+            (Some(1696), Some(1104))
+        );
+        assert_eq!(initial_session_size("vnc", true, win, scr), scr);
+        // A screen that is already mod-16 is created at its exact size.
+        assert_eq!(
+            initial_session_size("rdp", true, win, (Some(1920), Some(1088))),
+            (Some(1920), Some(1088))
+        );
+        // a terminal reflows instantly: window size, fullscreen or not
+        assert_eq!(initial_session_size("ssh", true, win, scr), win);
+        assert_eq!(initial_session_size("telnet", true, win, scr), win);
+        assert_eq!(initial_session_size("web", true, win, scr), win);
+        // not fullscreen, or no screen size offered: window size — still on
+        // the mod-16 grid for RDP, since the client's first size send is
+        // rounded to it by guacd either way (no resize on connect).
+        let win16 = (Some(1696), Some(944));
+        assert_eq!(initial_session_size("rdp", false, win, scr), win16);
+        assert_eq!(initial_session_size("rdp", true, win, (None, None)), win16);
+        assert_eq!(
+            initial_session_size("rdp", true, win, (Some(0), Some(0))),
+            win16
+        );
+        assert_eq!(initial_session_size("vnc", false, win, scr), win);
+        assert_eq!(
+            initial_session_size("rdp", false, (None, None), scr),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn round_down_mod16_floors_at_sixteen() {
+        assert_eq!(round_down_mod16(1710), 1696);
+        assert_eq!(round_down_mod16(1696), 1696);
+        assert_eq!(round_down_mod16(16), 16);
+        assert_eq!(round_down_mod16(15), 16);
+        assert_eq!(round_down_mod16(0), 16);
+    }
 
     #[test]
     fn report_bounds_read_a_bare_date_as_a_whole_local_day() {
