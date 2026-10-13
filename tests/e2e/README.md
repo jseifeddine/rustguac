@@ -28,6 +28,7 @@ One spec per change, named after the branch that introduced it:
 | `role-nav` | one nav on every page, gated by `data-role-level` |
 | `sessions-adhoc-modal` | ad-hoc form opens as a modal |
 | `facet-filters` | shared facets narrow lists, persist, combine with search |
+| `folder-display-name` | display name over the key, modal field round-trips |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.

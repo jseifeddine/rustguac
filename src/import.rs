@@ -309,6 +309,7 @@ pub async fn cmd_import_guacamole(
         allowed_groups: allowed_groups.to_vec(),
         allowed_users: Vec::new(),
         description: "Imported from Guacamole".to_string(),
+        display_name: String::new(),
         inherit_from_parent: false,
     };
     if let Err(e) = client.put_folder_config(scope, folder, &root_config).await {
@@ -339,6 +340,7 @@ pub async fn cmd_import_guacamole(
             allowed_groups: vec![],
             allowed_users: Vec::new(),
             description: format!("Imported from Guacamole: {}", sub),
+            display_name: String::new(),
             inherit_from_parent: true,
         };
         if let Err(e) = client.put_folder_config(scope, &full, &cfg).await {

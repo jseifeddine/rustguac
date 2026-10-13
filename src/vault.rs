@@ -66,6 +66,11 @@ pub struct FolderConfig {
     pub allowed_users: Vec<String>,
     #[serde(default)]
     pub description: String,
+    /// Human-readable title shown instead of the folder key (e.g. the NetBox
+    /// tenant name over its sanitised key). Omitted from the stored config
+    /// when empty, so existing configs are unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
     /// When true, if the folder's own `allowed_groups` doesn't grant access,
     /// the access check walks up the parent path and tries each ancestor's
     /// config. New folders default to `true` in the UI; legacy configs
@@ -623,6 +628,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
 pub struct FolderInfo {
     pub name: String,
     pub description: String,
+    /// Title to show for the folder; empty when none is set (show the name).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
     /// "shared" or "instance"
     pub scope: String,
     /// Full path from scope root (e.g. "Clients/Acme"). Same as name for top-level folders.
@@ -864,6 +872,7 @@ impl VaultClient {
                     folders.push(FolderInfo {
                         name: name.to_string(),
                         description: String::new(),
+                        display_name: String::new(),
                         scope: scope.to_string(),
                         path: Some(name.to_string()),
                         has_children: None, // enriched below
@@ -880,6 +889,7 @@ impl VaultClient {
         for folder in &mut folders {
             if let Ok(config) = self.get_folder_config(&folder.scope, &folder.name).await {
                 folder.description = config.description;
+                folder.display_name = config.display_name;
             }
             // Check for subfolders by listing children
             if let Ok(children) = self.list_children(&folder.scope, &folder.name).await {
@@ -919,6 +929,7 @@ impl VaultClient {
                 let mut info = FolderInfo {
                     name: name.to_string(),
                     description: String::new(),
+                    display_name: String::new(),
                     scope: scope.to_string(),
                     path: Some(full_path.clone()),
                     has_children: None,
@@ -926,6 +937,7 @@ impl VaultClient {
                 // Enrich with description
                 if let Ok(config) = self.get_folder_config(scope, &full_path).await {
                     info.description = config.description;
+                    info.display_name = config.display_name;
                 }
                 // Check for grandchildren
                 if let Ok(grandchildren) = self.list_children(scope, &full_path).await {
@@ -1698,11 +1710,38 @@ pub fn resolve_credential_variables(
 mod tests {
     use super::*;
 
+    #[test]
+    fn folder_config_display_name_is_optional_in_storage() {
+        // A config written before display names existed must still load, and
+        // a folder without one must be stored exactly as before, so existing
+        // Vault .config documents are untouched by the feature.
+        let legacy: FolderConfig =
+            serde_json::from_str(r#"{"allowed_groups":["ops"],"description":"Acme"}"#).unwrap();
+        assert_eq!(legacy.display_name, "");
+        let stored = serde_json::to_value(&legacy).unwrap();
+        assert!(
+            stored.get("display_name").is_none(),
+            "an empty display name is omitted from the stored config"
+        );
+
+        let mut named = legacy.clone();
+        named.display_name = "Dani & Fiori's Gourmet Pizzeria".to_string();
+        let stored = serde_json::to_value(&named).unwrap();
+        assert_eq!(
+            stored["display_name"],
+            serde_json::json!("Dani & Fiori's Gourmet Pizzeria")
+        );
+        let back: FolderConfig = serde_json::from_value(stored).unwrap();
+        assert_eq!(back.display_name, named.display_name);
+        assert_eq!(back.description, "Acme");
+    }
+
     fn cfg(groups: &[&str], users: &[&str]) -> FolderConfig {
         FolderConfig {
             allowed_groups: groups.iter().map(|s| s.to_string()).collect(),
             allowed_users: users.iter().map(|s| s.to_string()).collect(),
             description: String::new(),
+            display_name: String::new(),
             inherit_from_parent: false,
         }
     }

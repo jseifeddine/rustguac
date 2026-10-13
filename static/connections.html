@@ -169,6 +169,10 @@
             font-size: var(--fz-xl); color: var(--text);
             font-weight: bold; letter-spacing: 0.02em; line-height: 1.3;
         }
+        .entries-heading { display: inline-flex; flex-direction: column; line-height: 1.15; }
+        .entries-key { color: var(--text-dim); font-size: var(--fz-sm); letter-spacing: 0.04em; }
+        .entries-key:empty { display: none; }
+        .folder-desc.folder-key { letter-spacing: 0.04em; }
         .folder-actions .desc {
             color: var(--text-muted); font-size: var(--fz-md); font-style: italic;
         }
@@ -683,7 +687,10 @@
             <div class="main">
                 <div id="entries-header" style="display:none">
                     <div class="folder-actions">
-                        <strong id="entries-title"></strong>
+                        <span class="entries-heading">
+                            <strong id="entries-title"></strong>
+                            <span id="entries-key" class="entries-key"></span>
+                        </span>
                         <span id="entries-desc" class="desc"></span>
                         <input type="search" id="connections-search" class="connections-search" placeholder="Search connections..." autocomplete="off" disabled />
                         <button class="btn-add admin-only" id="btn-new-entry" style="display:none">+ add entry</button>
@@ -715,6 +722,9 @@
                 <input type="text" id="fm-name" placeholder="e.g. infra-servers" pattern="[a-zA-Z0-9_.-]+" maxlength="64">
             </label>
             <div class="field-hint">Alphanumeric, hyphens, underscores, dots only.</div>
+            <label>Display name <span class="hint">(optional: shown as the title, with the name beneath)</span>
+                <input type="text" id="fm-display" placeholder="e.g. Dani &amp; Fiori's Gourmet Pizzeria" maxlength="120">
+            </label>
             <label>Description
                 <input type="text" id="fm-desc" placeholder="e.g. Infrastructure servers">
             </label>
@@ -2013,6 +2023,7 @@
                         name: f.name,
                         scope: f.scope,
                         description: f.description || '',
+                        display_name: f.display_name || '',
                         path: f.path || f.name,
                         has_children: !!f.has_children
                     };
@@ -2166,8 +2177,11 @@
             nameRow.className = 'folder-name-row';
             var nameSpan = document.createElement('span');
             nameSpan.className = 'folder-name';
-            nameSpan.textContent = f.name;
-            nameSpan.title = f.name;
+            // Title is the display name when one is set (e.g. the NetBox tenant
+            // name); the folder key then goes on the subline. Without one the
+            // key is the title and the description the subline.
+            nameSpan.textContent = f.display_name || f.name;
+            nameSpan.title = f.display_name ? f.name + (f.description ? ' \u2014 ' + f.description : '') : (f.description || f.name);
             nameRow.appendChild(nameSpan);
             if (folderEntryCounts[key] !== undefined) {
                 // Entry count as a small right-aligned pill on the name line.
@@ -2189,10 +2203,10 @@
                 nameRow.appendChild(scopeBadge);
             }
             main.appendChild(nameRow);
-            if (f.description) {
+            if (f.display_name || f.description) {
                 var desc = document.createElement('span');
-                desc.className = 'folder-desc';
-                desc.textContent = f.description;
+                desc.className = 'folder-desc' + (f.display_name ? ' folder-key' : '');
+                desc.textContent = f.display_name ? f.name : f.description;
                 main.appendChild(desc);
             }
             row.appendChild(main);
@@ -2268,6 +2282,7 @@
                         name: sf.name,
                         scope: sf.scope,
                         description: sf.description || '',
+                        display_name: sf.display_name || '',
                         path: sf.path || (path + '/' + sf.name),
                         has_children: !!sf.has_children
                     };
@@ -2522,8 +2537,10 @@
         function loadEntries(scope, folderPath, forceRefresh) {
             var header = document.getElementById('entries-header');
             header.style.display = '';
-            document.getElementById('entries-title').textContent = folderPath;
             var f = findFolder(scope, folderPath);
+            var dn = f && f.display_name ? f.display_name : '';
+            document.getElementById('entries-title').textContent = dn || folderPath;
+            document.getElementById('entries-key').textContent = dn ? folderPath : '';
             document.getElementById('entries-desc').textContent = f && f.description ? f.description : '';
 
             var cacheKey = folderKey(scope, folderPath);
@@ -3350,6 +3367,7 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
+            document.getElementById('fm-display').value = '';
             document.getElementById('fm-scope').value = 'shared';
             document.getElementById('fm-scope').disabled = false;
             document.getElementById('fm-error').textContent = '';
@@ -3371,6 +3389,7 @@
             document.getElementById('fm-name').value = '';
             document.getElementById('fm-name').disabled = false;
             document.getElementById('fm-desc').value = '';
+            document.getElementById('fm-display').value = '';
             document.getElementById('fm-scope').value = subfolderParent.scope;
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
@@ -3396,6 +3415,7 @@
             document.getElementById('fm-name').value = selectedFolder.name;
             document.getElementById('fm-name').disabled = true;
             document.getElementById('fm-desc').value = selectedFolder.description || '';
+            document.getElementById('fm-display').value = selectedFolder.display_name || '';
             document.getElementById('fm-scope').value = selectedFolder.scope;
             document.getElementById('fm-scope').disabled = true;
             document.getElementById('fm-error').textContent = '';
@@ -3470,6 +3490,7 @@
         document.getElementById('fm-save').addEventListener('click', function() {
             var name = document.getElementById('fm-name').value.trim();
             var desc = document.getElementById('fm-desc').value.trim();
+            var displayName = document.getElementById('fm-display').value.trim();
             // Include anything still typed in the group input but not chipped yet
             addFmGroupFromInput();
             var groups = fmGroups.slice();
@@ -3493,7 +3514,7 @@
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
                     body: JSON.stringify(Object.assign(
-                        { allowed_groups: groups, description: desc, inherit_from_parent: document.getElementById('fm-inherit').checked },
+                        { allowed_groups: groups, description: desc, display_name: displayName, inherit_from_parent: document.getElementById('fm-inherit').checked },
                         // Only send the list once it has loaded: an omitted
                         // field keeps the stored list, an empty one clears it.
                         fmUsersLoaded ? { allowed_users: users } : {}
@@ -3503,7 +3524,7 @@
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
                     document.getElementById('folder-modal').classList.remove('active');
                     // Update selected folder description
-                    if (selectedFolder) selectedFolder.description = desc;
+                    if (selectedFolder) { selectedFolder.description = desc; selectedFolder.display_name = displayName; }
                     loadFolders();
                 })
                 .catch(function(err) { errEl.textContent = err.message; })
@@ -3515,7 +3536,7 @@
                     method: 'POST',
                     headers: apiHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, allowed_users: users, description: desc, scope: postScope, inherit_from_parent: document.getElementById('fm-inherit').checked })
+                    body: JSON.stringify({ name: fullPath, allowed_groups: groups, allowed_users: users, description: desc, display_name: displayName, scope: postScope, inherit_from_parent: document.getElementById('fm-inherit').checked })
                 })
                 .then(function(res) {
                     if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
@@ -3530,7 +3551,7 @@
                         delete subfolderCache[parentKey];
                         var parent = findFolder(parentScope, parentPath);
                         if (parent) parent.has_children = true;
-                        selectedFolder = { name: name, scope: postScope, description: desc, path: fullPath, has_children: false };
+                        selectedFolder = { name: name, scope: postScope, description: desc, display_name: displayName, path: fullPath, has_children: false };
                         saveSelectedFolder();
                         subfolderParent = null;
                         loadSubfolders(parentScope, parentPath, function() {
@@ -3538,7 +3559,7 @@
                             loadEntries(selectedFolder.scope, fullPath, true);
                         });
                     } else {
-                        selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                        selectedFolder = { name: name, scope: scope, description: desc, display_name: displayName, path: name, has_children: false };
                         saveSelectedFolder();
                         loadFolders();
                     }
