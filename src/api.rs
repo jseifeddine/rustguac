@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Extension, Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -3457,10 +3457,343 @@ pub async fn ab_create_entry(
     }
 }
 
-/// PUT /api/addressbook/folders/:scope/:folder/entries/:entry — Update an entry. Admin only.
-/// Performs a read-modify-write: reads the existing entry from Vault first, then merges
-/// incoming fields on top. This preserves credentials (password, private_key) that the
-/// frontend deliberately omits from edit forms.
+/// Query string of `PUT .../entries/:entry`.
+#[derive(Deserialize, Default)]
+pub struct EntryPutQuery {
+    /// `?move=true`: before the update, find the entry whose `external_id`
+    /// matches the body's anywhere in the scope and move it here, secrets
+    /// included, so a synced device that changes folder or name is moved
+    /// rather than duplicated. Needs `external_id` in the body; the name is
+    /// never used to match across folders.
+    #[serde(rename = "move", default)]
+    pub move_: bool,
+}
+
+/// The entry storage the update and move paths work on. A trait, like
+/// `FolderSource`, so the locate / move / merge sequence of
+/// `PUT ...?move=true` is unit-testable without a live Vault.
+#[allow(async_fn_in_trait)]
+trait EntryStore {
+    /// Every folder path in `scope`, top level and below.
+    async fn folder_paths(&self, scope: &str) -> Result<Vec<String>, VaultError>;
+    /// Entry names in one folder, subfolders excluded.
+    async fn entry_names(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError>;
+    /// The full entry, secrets included.
+    async fn get_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> Result<AddressBookEntry, VaultError>;
+    async fn put_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+        data: &AddressBookEntry,
+    ) -> Result<(), VaultError>;
+    /// Write only if nothing is stored there; `Ok(false)` when something is.
+    async fn put_entry_if_absent(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+        data: &AddressBookEntry,
+    ) -> Result<bool, VaultError>;
+    async fn delete_entry(&self, scope: &str, folder: &str, entry: &str) -> Result<(), VaultError>;
+}
+
+impl EntryStore for VaultBackends {
+    async fn folder_paths(&self, scope: &str) -> Result<Vec<String>, VaultError> {
+        let client = self.scoped(scope).await?;
+        let mut queue: Vec<String> = client
+            .list_folders_in_scope(scope)
+            .await?
+            .into_iter()
+            .map(|f| f.path.unwrap_or(f.name))
+            .collect();
+        let mut out = Vec::new();
+        while let Some(path) = queue.pop() {
+            match client.list_subfolders(scope, &path).await {
+                Ok(subs) => {
+                    for s in subs {
+                        queue.push(s.path.unwrap_or_else(|| format!("{path}/{}", s.name)));
+                    }
+                }
+                // Emptied since it was listed.
+                Err(VaultError::NotFound) => {}
+                Err(e) => return Err(e),
+            }
+            out.push(path);
+        }
+        Ok(out)
+    }
+
+    async fn entry_names(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
+        // The KV listing also returns subfolders, as `name/`.
+        match VaultBackends::list_entries(self, scope, folder).await {
+            Ok(names) => Ok(names.into_iter().filter(|n| !n.ends_with('/')).collect()),
+            Err(VaultError::NotFound) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn get_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> Result<AddressBookEntry, VaultError> {
+        VaultBackends::get_entry(self, scope, folder, entry).await
+    }
+
+    async fn put_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+        data: &AddressBookEntry,
+    ) -> Result<(), VaultError> {
+        VaultBackends::put_entry(self, scope, folder, entry, data).await
+    }
+
+    async fn put_entry_if_absent(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+        data: &AddressBookEntry,
+    ) -> Result<bool, VaultError> {
+        VaultBackends::put_entry_if_absent(self, scope, folder, entry, data).await
+    }
+
+    async fn delete_entry(&self, scope: &str, folder: &str, entry: &str) -> Result<(), VaultError> {
+        VaultBackends::delete_entry(self, scope, folder, entry).await
+    }
+}
+
+/// An update merged onto the stored entry: anything the request carries
+/// wins, and every secret it omits is kept, because neither the edit form
+/// (which never receives secrets) nor a sync source such as the NetBox
+/// webhook (which has none) can send them back. Jump host credentials are
+/// kept per hop by index; `external_id` is kept the same way so an edit
+/// from the form does not cut a synced entry loose from its source.
+fn merge_entry_update(data: AddressBookEntry, existing: AddressBookEntry) -> AddressBookEntry {
+    let merged_jump_hosts = if let Some(ref new_hops) = data.jump_hosts {
+        let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
+        let merged: Vec<_> = new_hops
+            .iter()
+            .enumerate()
+            .map(|(i, hop)| {
+                let old = old_hops.get(i);
+                crate::tunnel::JumpHost {
+                    hostname: hop.hostname.clone(),
+                    port: hop.port,
+                    username: hop.username.clone(),
+                    password: hop
+                        .password
+                        .clone()
+                        .or_else(|| old.and_then(|o| o.password.clone())),
+                    private_key: hop
+                        .private_key
+                        .clone()
+                        .or_else(|| old.and_then(|o| o.private_key.clone())),
+                    host_key: hop
+                        .host_key
+                        .clone()
+                        .or_else(|| old.and_then(|o| o.host_key.clone())),
+                }
+            })
+            .collect();
+        Some(merged)
+    } else {
+        data.jump_hosts.clone()
+    };
+
+    AddressBookEntry {
+        password: data.password.or(existing.password),
+        private_key: data.private_key.or(existing.private_key),
+        container_password: data.container_password.or(existing.container_password),
+        proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
+        external_id: data.external_id.or(existing.external_id),
+        jump_hosts: merged_jump_hosts,
+        // Clear legacy flat fields — they've been migrated
+        jump_password: None,
+        jump_private_key: None,
+        ..data
+    }
+}
+
+/// Where `PUT ...?move=true` found the entry before bringing it to the
+/// requested folder and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct MovedFrom {
+    folder: String,
+    name: String,
+}
+
+/// Why an upsert did not complete.
+#[derive(Debug)]
+enum UpsertError {
+    /// Nothing was changed.
+    Rejected(StatusCode, String),
+    /// The entry was copied to the requested folder but the original could
+    /// not be removed, so it now exists in both; the update was not applied.
+    MoveIncomplete { from: MovedFrom, error: VaultError },
+    /// The write of the update failed, after the move if there was one.
+    UpdateFailed {
+        moved_from: Option<MovedFrom>,
+        error: VaultError,
+    },
+}
+
+/// `?move=true`: find the entry stored under `external_id` in `scope` and
+/// bring it to `folder`/`entry`, with everything stored in it, before the
+/// update is applied. Returns where it came from, or `None` when nothing
+/// had to move (it is already there, or there is no such entry yet).
+///
+/// Matching is on `external_id` only. Entries elsewhere in the scope that
+/// merely share the name are not the same device (two tenants can each
+/// have a `fw01`) and are never touched.
+async fn relocate_by_external_id<S: EntryStore>(
+    store: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    external_id: &str,
+) -> Result<Option<MovedFrom>, UpsertError> {
+    let reject = |e: VaultError| {
+        let (status, msg) = ab_vault_error(e);
+        UpsertError::Rejected(status, msg)
+    };
+
+    // Already here: the steady state of a sync, and the only case that
+    // needs no scan.
+    match store.get_entry(scope, folder, entry).await {
+        Ok(existing) => {
+            return match existing.external_id.as_deref() {
+                Some(other) if other != external_id => Err(UpsertError::Rejected(
+                    StatusCode::CONFLICT,
+                    format!("{folder}/{entry} belongs to another device (external_id {other})"),
+                )),
+                // The same device, or an entry made by hand before syncing
+                // began: it is updated in place and adopts the id.
+                _ => Ok(None),
+            };
+        }
+        Err(VaultError::NotFound) => {}
+        Err(e) => return Err(reject(e)),
+    }
+
+    let mut found = Vec::new();
+    for other_folder in store.folder_paths(scope).await.map_err(reject)? {
+        for name in store
+            .entry_names(scope, &other_folder)
+            .await
+            .map_err(reject)?
+        {
+            if other_folder == folder && name == entry {
+                continue;
+            }
+            let stored = match store.get_entry(scope, &other_folder, &name).await {
+                Ok(e) => e,
+                Err(VaultError::NotFound) => continue, // deleted since it was listed
+                Err(e) => return Err(reject(e)),
+            };
+            if stored.external_id.as_deref() == Some(external_id) {
+                found.push(MovedFrom {
+                    folder: other_folder.clone(),
+                    name,
+                });
+            }
+        }
+    }
+
+    match found.len() {
+        0 => Ok(None),
+        1 => {
+            let from = found.remove(0);
+            match move_stored_entry(store, scope, &from.folder, &from.name, scope, folder, entry)
+                .await
+            {
+                Ok(_) => Ok(Some(from)),
+                Err(MoveError::Copy(status, msg)) => Err(UpsertError::Rejected(status, msg)),
+                Err(MoveError::Incomplete(error)) => {
+                    Err(UpsertError::MoveIncomplete { from, error })
+                }
+            }
+        }
+        n => {
+            let where_ = found
+                .iter()
+                .map(|f| format!("{}/{}", f.folder, f.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(UpsertError::Rejected(
+                StatusCode::CONFLICT,
+                format!("external_id {external_id} is stored on {n} entries ({where_}); nothing was changed"),
+            ))
+        }
+    }
+}
+
+/// What a completed upsert wrote, and where the entry came from if
+/// `?move=true` moved it.
+#[derive(Debug)]
+struct UpsertOutcome {
+    moved_from: Option<MovedFrom>,
+    entry: AddressBookEntry,
+}
+
+/// `PUT .../entries/:entry` without the HTTP: locate (and move) by
+/// `external_id` when asked, then read-modify-write so the request's fields
+/// land on top of everything stored, secrets included.
+async fn upsert_entry<S: EntryStore>(
+    store: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    data: AddressBookEntry,
+    move_: bool,
+) -> Result<UpsertOutcome, UpsertError> {
+    let moved_from = if move_ {
+        let Some(external_id) = data.external_id.as_deref().filter(|id| !id.is_empty()) else {
+            return Err(UpsertError::Rejected(
+                StatusCode::BAD_REQUEST,
+                "move=true needs external_id in the body: the entry is matched on it, not on its name"
+                    .into(),
+            ));
+        };
+        relocate_by_external_id(store, scope, folder, entry, external_id).await?
+    } else {
+        None
+    };
+
+    let merged = match store.get_entry(scope, folder, entry).await {
+        Ok(existing) => merge_entry_update(data, existing),
+        Err(VaultError::NotFound) => data,
+        // Writing the request as-is here would replace a stored entry with
+        // one that has no secrets, so a failed read is an error, not a create.
+        Err(error) => return Err(UpsertError::UpdateFailed { moved_from, error }),
+    };
+
+    match store.put_entry(scope, folder, entry, &merged).await {
+        Ok(()) => Ok(UpsertOutcome {
+            moved_from,
+            entry: merged,
+        }),
+        Err(error) => Err(UpsertError::UpdateFailed { moved_from, error }),
+    }
+}
+
+/// PUT /api/addressbook/folders/:scope/:folder/entries/:entry — Update an entry,
+/// creating it if there is none. Admin only.
+///
+/// Read-modify-write: the stored entry is read first and the request's
+/// fields are merged on top, so credentials the request omits are kept (see
+/// `merge_entry_update`). With `?move=true` the entry is first located by
+/// `external_id` anywhere in the scope and moved here, credentials included,
+/// by the same path as `POST .../move` (see `relocate_by_external_id`).
 #[allow(clippy::too_many_arguments)]
 pub async fn ab_update_entry(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -3470,6 +3803,7 @@ pub async fn ab_update_entry(
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
+    Query(query): Query<EntryPutQuery>,
     Json(data): Json<AddressBookEntry>,
 ) -> impl IntoResponse {
     let admin_email = match identity.as_ref() {
@@ -3482,63 +3816,51 @@ pub async fn ab_update_entry(
                 .into_response()
         }
     };
+    let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+    let external_id = data.external_id.clone();
 
-    // Read existing entry to preserve credentials the frontend never sends back
-    let merged = match vault.get_entry(&scope, &folder, &entry).await {
-        Ok(existing) => {
-            // Per-hop credential merge: for each hop in the new data, if credentials
-            // are None and the same-index hop exists in the old data, preserve them.
-            let merged_jump_hosts = if let Some(ref new_hops) = data.jump_hosts {
-                let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
-                let merged: Vec<_> = new_hops
-                    .iter()
-                    .enumerate()
-                    .map(|(i, hop)| {
-                        let old = old_hops.get(i);
-                        crate::tunnel::JumpHost {
-                            hostname: hop.hostname.clone(),
-                            port: hop.port,
-                            username: hop.username.clone(),
-                            password: hop
-                                .password
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.password.clone())),
-                            private_key: hop
-                                .private_key
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.private_key.clone())),
-                            host_key: hop
-                                .host_key
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.host_key.clone())),
-                        }
-                    })
-                    .collect();
-                Some(merged)
-            } else {
-                data.jump_hosts.clone()
-            };
+    let result = upsert_entry(vault.as_ref(), &scope, &folder, &entry, data, query.move_).await;
 
-            AddressBookEntry {
-                password: data.password.or(existing.password),
-                private_key: data.private_key.or(existing.private_key),
-                container_password: data.container_password.or(existing.container_password),
-                proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
-                jump_hosts: merged_jump_hosts,
-                // Clear legacy flat fields — they've been migrated
-                jump_password: None,
-                jump_private_key: None,
-                ..data
-            }
-        }
-        Err(_) => data, // New entry or Vault error — just write what we have
+    // A move that happened is recorded whatever came after it, as the move
+    // endpoint records it, so the audit log says where the entry went.
+    let (moved_from, incomplete) = match &result {
+        Ok(outcome) => (outcome.moved_from.as_ref(), false),
+        Err(UpsertError::UpdateFailed { moved_from, .. }) => (moved_from.as_ref(), false),
+        Err(UpsertError::MoveIncomplete { from, .. }) => (Some(from), true),
+        Err(UpsertError::Rejected(..)) => (None, false),
     };
+    if let Some(from) = moved_from {
+        let details = json!({
+            "to_scope": scope,
+            "to_folder": folder,
+            "to_name": entry,
+            "external_id": external_id,
+        })
+        .to_string();
+        log_ab_event(
+            &database,
+            &admin_email,
+            if incomplete {
+                "move_entry_incomplete"
+            } else {
+                "move_entry"
+            },
+            &scope,
+            &from.folder,
+            Some(&from.name),
+            &ip,
+            Some(&details),
+        )
+        .await;
+    }
 
-    let session_type = merged.session_type.clone();
-    match vault.put_entry(&scope, &folder, &entry, &merged).await {
-        Ok(()) => {
-            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-            let details = json!({ "type": session_type }).to_string();
+    match result {
+        Ok(outcome) => {
+            let details = json!({
+                "type": outcome.entry.session_type,
+                "moved_from": outcome.moved_from,
+            })
+            .to_string();
             log_ab_event(
                 &database,
                 &admin_email,
@@ -3550,11 +3872,25 @@ pub async fn ab_update_entry(
                 Some(&details),
             )
             .await;
-            Json(json!({"ok": true})).into_response()
+            match outcome.moved_from {
+                Some(from) => Json(json!({"ok": true, "moved_from": from})).into_response(),
+                None => Json(json!({"ok": true})).into_response(),
+            }
         }
-        Err(e) => (
+        Err(UpsertError::Rejected(status, msg)) => ab_error(status, msg),
+        Err(UpsertError::MoveIncomplete { error, .. }) => (
             StatusCode::BAD_GATEWAY,
-            Json(json!({"error": e.to_string()})),
+            Json(json!({
+                "error": format!(
+                    "entry was copied to the target folder but the original could not be removed: {error}"
+                ),
+                "copied": true,
+            })),
+        )
+            .into_response(),
+        Err(UpsertError::UpdateFailed { error, .. }) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": error.to_string()})),
         )
             .into_response(),
     }
@@ -3575,45 +3911,87 @@ fn ab_error(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 /// Copy an entry as stored in Vault, secrets included, to a target that
-/// must not already exist.
+/// must not already exist. Returns what was copied.
 ///
 /// The browser cannot do this itself: it never receives an entry's secrets
 /// (password, private key, jump host credentials, tokens, or a `$variable`
 /// reference held in the password field), so a copy built from the edit
 /// form silently dropped all of them (#232).
 ///
-/// Both endpoints that use this are admin-only, like every other change to
+/// Every endpoint that uses this is admin-only, like every other change to
 /// connection entries. If editing is ever delegated per folder (#231), they
 /// must require edit rights on the source AND the target: copying moves
 /// working credentials, so rights on the target alone would let an editor
 /// pull them out of a folder they cannot reach into one they can, and
 /// connect with them there.
-async fn copy_stored_entry(
-    vault: &VaultState,
+async fn copy_stored_entry<S: EntryStore>(
+    store: &S,
     scope: &str,
     folder: &str,
     entry: &str,
     target_scope: &str,
     target_folder: &str,
     target_name: &str,
-) -> Result<(), (StatusCode, String)> {
-    let full = vault
+) -> Result<AddressBookEntry, (StatusCode, String)> {
+    let full = store
         .get_entry(scope, folder, entry)
         .await
         .map_err(ab_vault_error)?;
     // Vault refuses the write if anything already exists at the target, so
     // an entry is never overwritten even by a concurrent writer.
-    match vault
+    match store
         .put_entry_if_absent(target_scope, target_folder, target_name, &full)
         .await
     {
-        Ok(true) => Ok(()),
+        Ok(true) => Ok(full),
         Ok(false) => Err((
             StatusCode::CONFLICT,
             "an entry with that name already exists in the target folder".into(),
         )),
         Err(e) => Err(ab_vault_error(e)),
     }
+}
+
+/// Why a move did not complete.
+#[derive(Debug)]
+enum MoveError {
+    /// Nothing was changed: the copy to the target was refused.
+    Copy(StatusCode, String),
+    /// The copy is in place but the original could not be removed, so the
+    /// entry now exists in both folders.
+    Incomplete(VaultError),
+}
+
+/// Move an entry with everything stored in it: the full entry is copied to
+/// the target and only then is the original removed, so a failure leaves it
+/// in both folders rather than in neither. This is the server-side move
+/// behind `POST .../move`; `PUT ...?move=true` goes through it too.
+#[allow(clippy::too_many_arguments)]
+async fn move_stored_entry<S: EntryStore>(
+    store: &S,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    target_scope: &str,
+    target_folder: &str,
+    target_name: &str,
+) -> Result<AddressBookEntry, MoveError> {
+    let full = copy_stored_entry(
+        store,
+        scope,
+        folder,
+        entry,
+        target_scope,
+        target_folder,
+        target_name,
+    )
+    .await
+    .map_err(|(status, msg)| MoveError::Copy(status, msg))?;
+    store
+        .delete_entry(scope, folder, entry)
+        .await
+        .map_err(MoveError::Incomplete)?;
+    Ok(full)
 }
 
 /// Status for a Vault error on the move/copy path: a rejected name or
@@ -3658,8 +4036,16 @@ pub async fn ab_move_entry(
     if req.target_scope == scope && req.target_folder == folder {
         return ab_error(StatusCode::BAD_REQUEST, "entry is already in that folder");
     }
-    if let Err((status, msg)) = copy_stored_entry(
-        &vault,
+
+    let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+    let details = json!({
+        "to_scope": req.target_scope,
+        "to_folder": req.target_folder,
+    })
+    .to_string();
+
+    match move_stored_entry(
+        vault.as_ref(),
         &scope,
         &folder,
         &entry,
@@ -3669,41 +4055,34 @@ pub async fn ab_move_entry(
     )
     .await
     {
-        return ab_error(status, msg);
-    }
-
-    let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-    let details = json!({
-        "to_scope": req.target_scope,
-        "to_folder": req.target_folder,
-    })
-    .to_string();
-
-    // The copy is in place, so a failure from here on leaves the entry in
-    // both folders rather than in neither. Say so instead of reporting a
-    // plain error the caller might answer by retrying.
-    if let Err(e) = vault.delete_entry(&scope, &folder, &entry).await {
-        log_ab_event(
-            &database,
-            &admin_email,
-            "move_entry_incomplete",
-            &scope,
-            &folder,
-            Some(&entry),
-            &ip,
-            Some(&details),
-        )
-        .await;
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": format!(
-                    "entry was copied to the target folder but the original could not be removed: {e}"
-                ),
-                "copied": true,
-            })),
-        )
-            .into_response();
+        Ok(_) => {}
+        Err(MoveError::Copy(status, msg)) => return ab_error(status, msg),
+        // The copy is in place, so the entry is in both folders rather than
+        // in neither. Say so instead of reporting a plain error the caller
+        // might answer by retrying.
+        Err(MoveError::Incomplete(e)) => {
+            log_ab_event(
+                &database,
+                &admin_email,
+                "move_entry_incomplete",
+                &scope,
+                &folder,
+                Some(&entry),
+                &ip,
+                Some(&details),
+            )
+            .await;
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": format!(
+                        "entry was copied to the target folder but the original could not be removed: {e}"
+                    ),
+                    "copied": true,
+                })),
+            )
+                .into_response();
+        }
     }
 
     log_ab_event(
@@ -4112,7 +4491,7 @@ pub async fn ab_copy_entry(
         return ab_error(StatusCode::BAD_REQUEST, "copy needs a new name or folder");
     }
     if let Err((status, msg)) = copy_stored_entry(
-        &vault,
+        vault.as_ref(),
         &scope,
         &folder,
         &entry,
@@ -5779,6 +6158,527 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn entry_put_query_parses_the_move_flag() {
+        // `PUT .../entries/:entry?move=true` is what the NetBox upsert sends;
+        // the flag must default to off and accept only an explicit true.
+        let q: EntryPutQuery = serde_urlencoded::from_str("move=true").unwrap();
+        assert!(q.move_);
+        let q: EntryPutQuery = serde_urlencoded::from_str("move=false").unwrap();
+        assert!(!q.move_);
+        let q: EntryPutQuery = serde_urlencoded::from_str("").unwrap();
+        assert!(!q.move_, "move defaults to off");
+        assert!(
+            serde_urlencoded::from_str::<EntryPutQuery>("move=yes").is_err(),
+            "a non-boolean value is rejected rather than treated as true"
+        );
+    }
+
+    // ── `PUT .../entries/:entry?move=true`: the entry is matched on its
+    // stored external_id, never on its name across folders; a match
+    // elsewhere is moved whole by the server-side move and only then
+    // updated, so no secret the payload lacks is ever lost. ──
+
+    /// In-memory stand-in for the Vault entry store, keyed by folder + name.
+    #[derive(Default)]
+    struct FakeStore {
+        entries: std::sync::Mutex<std::collections::BTreeMap<(String, String), AddressBookEntry>>,
+        /// Make every delete fail, for the incomplete-move path.
+        fail_delete: bool,
+    }
+
+    impl FakeStore {
+        fn with(entries: &[(&str, &str, AddressBookEntry)]) -> Self {
+            let store = FakeStore::default();
+            for (folder, name, e) in entries {
+                store
+                    .entries
+                    .lock()
+                    .unwrap()
+                    .insert((folder.to_string(), name.to_string()), e.clone());
+            }
+            store
+        }
+        fn stored(&self, folder: &str, name: &str) -> Option<AddressBookEntry> {
+            self.entries
+                .lock()
+                .unwrap()
+                .get(&(folder.to_string(), name.to_string()))
+                .cloned()
+        }
+        /// Every `folder/name` held, sorted.
+        fn keys(&self) -> Vec<String> {
+            self.entries
+                .lock()
+                .unwrap()
+                .keys()
+                .map(|(f, n)| format!("{f}/{n}"))
+                .collect()
+        }
+    }
+
+    impl EntryStore for FakeStore {
+        async fn folder_paths(&self, _scope: &str) -> Result<Vec<String>, VaultError> {
+            let mut folders: Vec<String> = self
+                .entries
+                .lock()
+                .unwrap()
+                .keys()
+                .map(|(f, _)| f.clone())
+                .collect();
+            folders.dedup();
+            Ok(folders)
+        }
+        async fn entry_names(&self, _scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
+            Ok(self
+                .entries
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|(f, _)| f == folder)
+                .map(|(_, n)| n.clone())
+                .collect())
+        }
+        async fn get_entry(
+            &self,
+            _scope: &str,
+            folder: &str,
+            entry: &str,
+        ) -> Result<AddressBookEntry, VaultError> {
+            self.stored(folder, entry).ok_or(VaultError::NotFound)
+        }
+        async fn put_entry(
+            &self,
+            _scope: &str,
+            folder: &str,
+            entry: &str,
+            data: &AddressBookEntry,
+        ) -> Result<(), VaultError> {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert((folder.to_string(), entry.to_string()), data.clone());
+            Ok(())
+        }
+        async fn put_entry_if_absent(
+            &self,
+            _scope: &str,
+            folder: &str,
+            entry: &str,
+            data: &AddressBookEntry,
+        ) -> Result<bool, VaultError> {
+            let mut entries = self.entries.lock().unwrap();
+            let key = (folder.to_string(), entry.to_string());
+            if entries.contains_key(&key) {
+                return Ok(false);
+            }
+            entries.insert(key, data.clone());
+            Ok(true)
+        }
+        async fn delete_entry(
+            &self,
+            _scope: &str,
+            folder: &str,
+            entry: &str,
+        ) -> Result<(), VaultError> {
+            if self.fail_delete {
+                return Err(VaultError::Parse("delete refused".into()));
+            }
+            self.entries
+                .lock()
+                .unwrap()
+                .remove(&(folder.to_string(), entry.to_string()))
+                .map(|_| ())
+                .ok_or(VaultError::NotFound)
+        }
+    }
+
+    /// An entry from JSON, as the webhook or the edit form sends it.
+    fn entry(v: serde_json::Value) -> AddressBookEntry {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// Device 1 as stored, with every kind of credential someone adds by
+    /// hand: a password holding a `$variable` reference, a private key and
+    /// a jump host password.
+    fn fw01_stored() -> AddressBookEntry {
+        entry(json!({
+            "type": "ssh", "hostname": "10.0.0.1", "port": 22, "username": "admin",
+            "password": "$tenant_a_password", "private_key": "-----BEGIN KEY-----",
+            "jump_hosts": [{"hostname": "bastion", "port": 22, "username": "jump", "password": "jump-pw"}],
+            "external_id": "netbox:device:1"
+        }))
+    }
+
+    /// What the NetBox webhook sends for device 1: no secrets at all.
+    fn fw01_webhook(hostname: &str) -> AddressBookEntry {
+        entry(json!({
+            "type": "ssh", "hostname": hostname, "port": 22, "username": "admin",
+            "jump_hosts": [{"hostname": "bastion", "port": 22, "username": "jump"}],
+            "external_id": "netbox:device:1"
+        }))
+    }
+
+    fn from(folder: &str, name: &str) -> MovedFrom {
+        MovedFrom {
+            folder: folder.into(),
+            name: name.into(),
+        }
+    }
+
+    fn rejected(err: UpsertError) -> (StatusCode, String) {
+        match err {
+            UpsertError::Rejected(status, msg) => (status, msg),
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn move_upsert_leaves_a_same_named_entry_in_another_folder_alone() {
+        // Names are not unique across folders: tenant A and tenant B each
+        // have a fw01. A's webhook must never touch B's, credentials and all.
+        let store = FakeStore::with(&[
+            ("tenant-a", "fw01", fw01_stored()),
+            (
+                "tenant-b",
+                "fw01",
+                entry(
+                    json!({"type": "ssh", "hostname": "10.0.1.1", "password": "b-secret",
+                             "external_id": "netbox:device:2"}),
+                ),
+            ),
+        ]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-a",
+            "fw01",
+            fw01_webhook("10.0.0.9"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, None);
+        assert_eq!(store.keys(), ["tenant-a/fw01", "tenant-b/fw01"]);
+        let b = store.stored("tenant-b", "fw01").unwrap();
+        assert_eq!(b.password.as_deref(), Some("b-secret"));
+        assert_eq!(b.hostname.as_deref(), Some("10.0.1.1"));
+        let a = store.stored("tenant-a", "fw01").unwrap();
+        assert_eq!(a.hostname.as_deref(), Some("10.0.0.9"));
+
+        // A third tenant's own fw01 is created there; the other two are as
+        // they were.
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-c",
+            "fw01",
+            entry(json!({"type": "ssh", "hostname": "10.0.2.1", "external_id": "netbox:device:3"})),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, None);
+        assert_eq!(
+            store.keys(),
+            ["tenant-a/fw01", "tenant-b/fw01", "tenant-c/fw01"]
+        );
+        assert_eq!(
+            store
+                .stored("tenant-a", "fw01")
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("$tenant_a_password")
+        );
+        assert_eq!(
+            store
+                .stored("tenant-b", "fw01")
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("b-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn move_upsert_moves_the_matched_entry_with_its_credentials() {
+        // The device changed tenant, so the webhook now writes to tenant B's
+        // (nested) folder, and it carries no secrets. The stored entry is
+        // moved whole first (#232: the $variable reference, the key and the
+        // jump host password come along), and the update lands on top.
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenants/tenant-b",
+            "fw01",
+            fw01_webhook("10.0.1.9"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, Some(from("tenant-a", "fw01")));
+        assert_eq!(
+            store.keys(),
+            ["tenants/tenant-b/fw01"],
+            "the original is gone and nothing else appeared"
+        );
+        let moved = store.stored("tenants/tenant-b", "fw01").unwrap();
+        assert_eq!(
+            moved.hostname.as_deref(),
+            Some("10.0.1.9"),
+            "update applied"
+        );
+        assert_eq!(moved.password.as_deref(), Some("$tenant_a_password"));
+        assert_eq!(moved.private_key.as_deref(), Some("-----BEGIN KEY-----"));
+        assert_eq!(
+            moved.jump_hosts.as_ref().unwrap()[0].password.as_deref(),
+            Some("jump-pw")
+        );
+        assert_eq!(moved.external_id.as_deref(), Some("netbox:device:1"));
+    }
+
+    #[tokio::test]
+    async fn move_upsert_follows_a_rename_within_the_folder() {
+        // Same tenant, new device name: matched on the id, so it is a move
+        // (with its secrets), not a second entry beside an orphan.
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-a",
+            "fw01-core",
+            fw01_webhook("10.0.0.1"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, Some(from("tenant-a", "fw01")));
+        assert_eq!(store.keys(), ["tenant-a/fw01-core"]);
+        assert_eq!(
+            store
+                .stored("tenant-a", "fw01-core")
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("$tenant_a_password")
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_without_secrets_keeps_the_stored_ones() {
+        // The steady state: the device is where the webhook says. A payload
+        // without secrets keeps every stored one, and a form edit that also
+        // omits external_id keeps that.
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-a",
+            "fw01",
+            fw01_webhook("10.0.0.2"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, None, "already there: nothing to move");
+        let e = store.stored("tenant-a", "fw01").unwrap();
+        assert_eq!(e.hostname.as_deref(), Some("10.0.0.2"));
+        assert_eq!(e.password.as_deref(), Some("$tenant_a_password"));
+        assert_eq!(e.private_key.as_deref(), Some("-----BEGIN KEY-----"));
+        assert_eq!(
+            e.jump_hosts.as_ref().unwrap()[0].password.as_deref(),
+            Some("jump-pw")
+        );
+
+        // The edit form: no secrets, no external_id, no move flag.
+        let form = entry(
+            json!({"type": "ssh", "hostname": "10.0.0.3", "port": 2222, "username": "admin"}),
+        );
+        upsert_entry(&store, "shared", "tenant-a", "fw01", form, false)
+            .await
+            .unwrap();
+        let e = store.stored("tenant-a", "fw01").unwrap();
+        assert_eq!(e.port, Some(2222));
+        assert_eq!(e.password.as_deref(), Some("$tenant_a_password"));
+        assert_eq!(
+            e.external_id.as_deref(),
+            Some("netbox:device:1"),
+            "a form edit does not cut the entry loose from its source"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_upsert_adopts_a_hand_made_entry_of_that_name() {
+        // Made by hand before syncing began: same folder and name, no id.
+        // Updated in place, password kept, and it takes the id.
+        let store = FakeStore::with(&[(
+            "tenant-a",
+            "fw01",
+            entry(json!({"type": "ssh", "hostname": "10.0.0.1", "password": "typed-in"})),
+        )]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-a",
+            "fw01",
+            fw01_webhook("10.0.0.1"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, None);
+        let e = store.stored("tenant-a", "fw01").unwrap();
+        assert_eq!(e.password.as_deref(), Some("typed-in"));
+        assert_eq!(e.external_id.as_deref(), Some("netbox:device:1"));
+    }
+
+    #[tokio::test]
+    async fn move_upsert_needs_an_external_id() {
+        // Without an id there is nothing to match on but the name, which is
+        // exactly what must not happen: refused, and nothing is touched.
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let payload = entry(json!({"type": "ssh", "hostname": "10.0.0.1"}));
+        let (status, msg) = rejected(
+            upsert_entry(&store, "shared", "tenant-b", "fw01", payload, true)
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(msg.contains("external_id"), "{msg}");
+        assert_eq!(store.keys(), ["tenant-a/fw01"]);
+    }
+
+    #[tokio::test]
+    async fn move_upsert_refuses_a_name_held_by_another_device() {
+        // Device 1 moves to tenant B, where a different device is already
+        // fw01. Neither entry is overwritten or removed.
+        let store = FakeStore::with(&[
+            ("tenant-a", "fw01", fw01_stored()),
+            (
+                "tenant-b",
+                "fw01",
+                entry(
+                    json!({"type": "ssh", "hostname": "10.0.1.1", "password": "b-secret",
+                             "external_id": "netbox:device:2"}),
+                ),
+            ),
+        ]);
+        let (status, _) = rejected(
+            upsert_entry(
+                &store,
+                "shared",
+                "tenant-b",
+                "fw01",
+                fw01_webhook("10.0.1.9"),
+                true,
+            )
+            .await
+            .unwrap_err(),
+        );
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(store.keys(), ["tenant-a/fw01", "tenant-b/fw01"]);
+        let b = store.stored("tenant-b", "fw01").unwrap();
+        assert_eq!(b.password.as_deref(), Some("b-secret"));
+        assert_eq!(b.hostname.as_deref(), Some("10.0.1.1"));
+        assert_eq!(
+            store
+                .stored("tenant-a", "fw01")
+                .unwrap()
+                .password
+                .as_deref(),
+            Some("$tenant_a_password")
+        );
+    }
+
+    #[tokio::test]
+    async fn move_upsert_refuses_an_ambiguous_external_id() {
+        // The same id on two entries is a mess to sort out by hand, not
+        // something to guess at.
+        let store = FakeStore::with(&[
+            ("tenant-a", "fw01", fw01_stored()),
+            ("tenant-c", "fw01-old", fw01_stored()),
+        ]);
+        let (status, msg) = rejected(
+            upsert_entry(
+                &store,
+                "shared",
+                "tenant-b",
+                "fw01",
+                fw01_webhook("10.0.1.9"),
+                true,
+            )
+            .await
+            .unwrap_err(),
+        );
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            msg.contains("tenant-a/fw01") && msg.contains("tenant-c/fw01-old"),
+            "{msg}"
+        );
+        assert_eq!(store.keys(), ["tenant-a/fw01", "tenant-c/fw01-old"]);
+    }
+
+    #[tokio::test]
+    async fn move_upsert_reports_a_move_it_could_not_finish() {
+        // Copied to the target but the original could not be removed: the
+        // entry is in both folders, the update is not applied, and the
+        // caller is told so rather than given an error it would retry.
+        let mut store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        store.fail_delete = true;
+        match upsert_entry(
+            &store,
+            "shared",
+            "tenant-b",
+            "fw01",
+            fw01_webhook("10.0.1.9"),
+            true,
+        )
+        .await
+        .unwrap_err()
+        {
+            UpsertError::MoveIncomplete { from: at, .. } => {
+                assert_eq!(at, from("tenant-a", "fw01"))
+            }
+            other => panic!("expected MoveIncomplete, got {other:?}"),
+        }
+        assert_eq!(store.keys(), ["tenant-a/fw01", "tenant-b/fw01"]);
+        assert_eq!(
+            store
+                .stored("tenant-b", "fw01")
+                .unwrap()
+                .hostname
+                .as_deref(),
+            Some("10.0.0.1"),
+            "the copy is the stored entry, not the update"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_upsert_never_moves() {
+        // Without ?move=true the same payload is the plain name upsert it
+        // always was: created here, the entry elsewhere left alone.
+        let store = FakeStore::with(&[("tenant-a", "fw01", fw01_stored())]);
+        let out = upsert_entry(
+            &store,
+            "shared",
+            "tenant-b",
+            "fw01",
+            fw01_webhook("10.0.1.9"),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.moved_from, None);
+        assert_eq!(store.keys(), ["tenant-a/fw01", "tenant-b/fw01"]);
+        assert_eq!(
+            store.stored("tenant-b", "fw01").unwrap().password,
+            None,
+            "a plain create has only what the payload carried"
+        );
+    }
 
     #[test]
     fn report_bounds_read_a_bare_date_as_a_whole_local_day() {

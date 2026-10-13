@@ -590,12 +590,26 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `display_name` | string | All | Friendly display name (shown as banner) |
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
+| `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 
 For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted.
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
-Update a connection entry. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+Update a connection entry, or create it if there is none of that name in the folder. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`, `container_password`, `proxmox_token_secret`) that are omitted from the request are preserved from the existing entry, and so is `external_id`. Jump host credentials are merged per-hop by index. If the existing entry cannot be read for any reason other than not existing, the response is `502` and nothing is written, so a request without secrets never replaces an entry that has them.
+
+**`?move=true`** is for sync sources such as the [NetBox webhook](netbox.md#create-webhook-device-createdupdated), where the folder or the name is computed from the device and can change. It needs `external_id` in the body and matches the device on that, never on its name:
+
+1. If `:folder/:entry` exists with the same `external_id`, or with none (an entry made by hand before syncing began), it is updated in place.
+2. Otherwise every entry in the scope is read, and the one carrying that `external_id` is moved to `:folder/:entry` by the server-side move below, credentials and credential variables included, and the update is then applied on top. The response says where it came from:
+
+   ```json
+   { "ok": true, "moved_from": { "folder": "mrgelato", "name": "fw01" } }
+   ```
+
+3. If no entry carries it, the entry is created.
+
+Entries in other folders that merely share the name are never touched. Responses: `400` without `external_id`; `409` if `:folder/:entry` belongs to a different `external_id`, or if the `external_id` is stored on more than one entry in the scope (nothing is changed either way); `502` with `"copied": true` if the move copied the entry but could not remove the original (it then exists in both folders, and the update is not applied). The scan in step 2 reads every entry in the scope, but it only happens when the entry is not already where the request says, that is on first sight of a device and when it moves.
 
 ### `DELETE /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 

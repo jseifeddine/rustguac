@@ -196,6 +196,8 @@ pub async fn cmd_import_guacamole(
             wol_broadcast_addr: param_map.get("wol-broadcast-addr").map(|s| s.to_string()),
             wol_udp_port: param_map.get("wol-udp-port").and_then(|s| s.parse().ok()),
             wol_wait_time: param_map.get("wol-wait-time").and_then(|s| s.parse().ok()),
+            // A Guacamole dump is a one-off import, not a sync source.
+            external_id: None,
         };
 
         if !cred_maps.is_empty()

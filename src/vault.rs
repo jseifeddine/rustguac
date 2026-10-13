@@ -328,6 +328,14 @@ pub struct AddressBookEntry {
     /// to connect, giving the host time to boot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wol_wait_time: Option<u32>,
+    /// Stable id of the record this entry is synced from, set by the source
+    /// (the NetBox webhook sends `netbox:device:<id>`). `PUT ...?move=true`
+    /// matches an existing entry on this, never on its name, so a device
+    /// that changes folder or name is moved rather than duplicated. Never
+    /// used to connect. Preserved on update when the request omits it, as
+    /// the edit form does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
 }
 
 impl AddressBookEntry {
@@ -526,6 +534,10 @@ pub struct EntryInfo {
     /// Wake-on-LAN: wait time (seconds) after sending the packet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wol_wait_time: Option<u32>,
+    /// Stable id of the record this entry is synced from (see
+    /// `AddressBookEntry::external_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -614,6 +626,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             wol_broadcast_addr: e.wol_broadcast_addr.clone(),
             wol_udp_port: e.wol_udp_port,
             wol_wait_time: e.wol_wait_time,
+            external_id: e.external_id.clone(),
         }
     }
 }
