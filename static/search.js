@@ -291,17 +291,58 @@
         content.scrollTop = 0;
     }
 
+    // "Open in a new window" (⧉): open a sized popup synchronously (inside the
+    // click, so it is not blocked) on the splash page /launch.html, which
+    // measures its own viewport once laid out and posts it back. The caller
+    // creates the session at exactly that size, so nothing resizes after the
+    // first paint. A popup's size cannot be read from here right after
+    // window.open — it reports the opener's size until the window is laid out
+    // (that was the RDP resize on ⧉). Resolves {width,height} either way:
+    // defaults if the popup was blocked, or after 2.5s if it never answers.
+    function rgOpenSessionWindow(name) {
+        var win = window.open('/launch.html?name=' + encodeURIComponent(name), '_blank',
+            'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+        var size = new Promise(function (resolve) {
+            var done = false;
+            function fin(w, h) {
+                if (done) return; done = true;
+                window.removeEventListener('message', onMsg); clearTimeout(cap);
+                resolve({ width: w > 0 ? w : 1280, height: h > 0 ? h : 800 });
+            }
+            function onMsg(e) {
+                if (e.origin !== location.origin || !e.data || e.data.rgLaunch !== 'size' || e.source !== win) return;
+                fin(e.data.width, e.data.height);
+            }
+            var cap = null;
+            if (!win) { fin(0, 0); return; }
+            window.addEventListener('message', onMsg);
+            cap = setTimeout(function () {
+                var w = 0, h = 0; try { w = win.innerWidth; h = win.innerHeight; } catch (e) {}
+                fin(w, h);
+            }, 2500);
+        });
+        return { win: win, size: size };
+    }
+    window.rgOpenSessionWindow = rgOpenSessionWindow;
+
     // Connect to an entry: open the client in a window opened within this click
     // (keeps activation for fullscreen). Missing credentials send the user to
     // the connections page to set them.
-    function doConnect(scope, folder, name, btn) {
-        var win = window.open('', '_blank');
+    function doConnect(scope, folder, name, btn, newWindow) {
+        // The ⧉ button gets a sized popup (measured, see above), a plain Connect a tab.
+        var pop = newWindow ? rgOpenSessionWindow(name) : null;
+        var win = pop ? pop.win : window.open('', '_blank');
         if (btn) { btn.classList.add('loading'); btn.disabled = true; }
         var reset = function () { if (btn) { btn.classList.remove('loading'); btn.disabled = false; } };
         var body = { width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) };
-        if (window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
-        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
-            { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
+        // screen_* only for the tab path (the server prefers it for a
+        // fullscreen bitmap entry); a popup is sized by its measurement alone.
+        if (!newWindow && window.screen && screen.width) { body.screen_width = screen.width; body.screen_height = screen.height; }
+        (pop ? pop.size : Promise.resolve(null)).then(function (sz) {
+            if (sz) { body.width = sz.width; body.height = sz.height; }
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
+                { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) });
+        })
             .then(function (res) {
                 if (!res.ok) {
                     if (win && !win.closed) win.close();
@@ -312,12 +353,134 @@
             })
             .then(function (data) {
                 if (!data) return;
-                var url = data.client_url + '?name=' + encodeURIComponent(name);
+                var _row = null, _si = searchIndex || [];
+                for (var _k = 0; _k < _si.length; _k++) { var _r = _si[_k]; if (_r.scope === scope && _r.folderPath === folder && _r.entry.name === name) { _row = _r; break; } }
+                var _fs = _row && _row.entry && _row.entry.fullscreen_on_connect;
+                // A new window is explicitly windowed: fs=0 tells the client
+                // not to fullscreen-on-connect even if the entry asks for it.
+                var url = data.client_url + '?name=' + encodeURIComponent(name) + (newWindow ? '&fs=0' : (_fs ? '&fs=1' : ''));
                 if (win && !win.closed) win.location.href = url; else window.open(url, '_blank');
             })
             .catch(function () { if (win && !win.closed) win.close(); })
             .then(reset, reset);
     }
+    // Zero-click fullscreen: a browser only lets the tab that holds the Connect
+    // gesture go fullscreen, so for a fullscreen-on-connect entry we fullscreen
+    // THIS tab now and load the session in a full-viewport iframe (the embedded
+    // client fills it). No new tab, no second click. If the browser refuses
+    // fullscreen the session still loads in the overlay, filling the tab.
+    function rgLaunchFullscreen(scope, folder, name, btn) {
+        var el = document.documentElement;
+        var req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+        // The session must be created at the viewport's FINAL size — the one
+        // the frame will paint into — or the first picture is a fit of some
+        // other size that the post-connect resize then snaps. That size cannot
+        // be predicted: screen.width/height overshoot on a notched Mac (the
+        // strip beside the camera is never part of a fullscreen viewport) and
+        // the transition is asynchronous. So: enter fullscreen first, wait for
+        // the viewport to stop changing, measure it, then connect. Refused (or
+        // no Fullscreen API): the overlay fills the tab as it is, so measure
+        // that straight away. Costs the transition time (~half a second)
+        // before the connect request goes out; buys zero resizes.
+        var fsState = null, frameReady = false;   // null = pending, true = entered, false = refused
+        var started = false, settleTimer = null, lastW = 0, lastH = 0;
+        var w0 = window.innerWidth, h0 = window.innerHeight, fsAt = 0;   // pre-fullscreen size
+        function pushViewport() {
+            if (!frameReady || fsState === null) return;
+            var fr = document.getElementById('rg-session-frame');
+            try { if (fr && fr.contentWindow) fr.contentWindow.postMessage({ rgLauncher: 'viewport', fullscreen: fsState }, location.origin); } catch (e) {}
+        }
+        // Connect once the viewport has held the same size for 150ms.
+        function armSettle() {
+            lastW = window.innerWidth; lastH = window.innerHeight;
+            clearTimeout(settleTimer);
+            settleTimer = setTimeout(function () {
+                if (window.innerWidth !== lastW || window.innerHeight !== lastH) { armSettle(); return; }
+                // Entered fullscreen but the viewport still has its windowed
+                // size: the resize has not landed yet (some browsers fire
+                // fullscreenchange first). Keep waiting, up to 1.5s.
+                if (fsState === true && window.innerWidth === w0 && window.innerHeight === h0 && Date.now() - fsAt < 1500) { armSettle(); return; }
+                startConnect();
+            }, 150);
+        }
+        function onResize() { if (!started) armSettle(); }
+        function fsRefused() { if (fsState === null) { fsState = false; pushViewport(); startConnect(); } }
+        window.addEventListener('resize', onResize);
+        if (req) {
+            try { var fp = req.call(el); if (fp && fp.catch) fp.catch(fsRefused); } catch (e) { fsRefused(); }
+            // No fullscreenchange within 3s (a browser that returns no promise
+            // and never enters): treat as refused.
+            setTimeout(fsRefused, 3000);
+        } else fsRefused();
+        var ov = document.createElement('div'); ov.id = 'rg-session-overlay';
+        ov.innerHTML = '<div id="rg-session-spinner"></div>' +
+            '<button id="rg-session-exit" type="button" title="Exit">× Exit</button>' +
+            '<iframe id="rg-session-frame" allow="fullscreen; clipboard-read; clipboard-write" title="Session"></iframe>';
+        document.body.appendChild(ov);
+        if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+        var done = false, enteredFs = false;
+        function teardown() {
+            if (done) return; done = true;
+            window.removeEventListener('message', onMsg);
+            window.removeEventListener('resize', onResize);
+            clearTimeout(settleTimer);
+            document.removeEventListener('fullscreenchange', onFsChange);
+            var o = document.getElementById('rg-session-overlay'); if (o) o.remove();
+            if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
+            try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); } catch (e) {}
+        }
+        function onMsg(e) {
+            if (e.origin !== location.origin || !e.data) return;
+            if (e.data.rgSession === 'ready') { var sp = document.getElementById('rg-session-spinner'); if (sp) sp.style.display = 'none'; frameReady = true; pushViewport(); }
+            else if (e.data.rgSession === 'end') teardown();
+        }
+        function onFsChange() {
+            if (document.fullscreenElement) {
+                enteredFs = true;
+                if (fsState === null) { fsState = true; fsAt = Date.now(); pushViewport(); }
+                // Entered: the viewport may already be final or still animating;
+                // the settle check covers both.
+                if (!started) armSettle();
+            }
+            else if (enteredFs) { teardown(); }
+        }
+        window.addEventListener('message', onMsg);
+        document.addEventListener('fullscreenchange', onFsChange);
+        document.getElementById('rg-session-exit').addEventListener('click', teardown);
+        // Create the session at the measured viewport size — the size the
+        // frame paints into — so there is nothing to resize afterwards.
+        function startConnect() {
+            if (started || done) return;
+            started = true;
+            clearTimeout(settleTimer);
+            window.removeEventListener('resize', onResize);
+            // Window size only: the measured viewport IS the fullscreen size.
+            // No screen_width/height — the server prefers those for a
+            // fullscreen bitmap session, and the physical screen overshoots
+            // the viewport on a notched Mac (that was the RDP resize).
+            var body = { dpi: Math.round((window.devicePixelRatio || 1) * 96), width: window.innerWidth, height: window.innerHeight };
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect',
+                { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), credentials: 'same-origin', body: JSON.stringify(body) })
+                .then(function (res) {
+                    if (!res.ok) { if (res.status === 412) { teardown(); openFolder(scope, folder); return null; } return res.text().then(function (t) { throw new Error(t); }); }
+                    return res.json();
+                })
+                .then(function (data) {
+                    if (!data) return;
+                    var fr = document.getElementById('rg-session-frame');
+                    if (!fr) return;
+                    fr.src = data.client_url + '?name=' + encodeURIComponent(name) + '&embedded=1';
+                    // Fallback: hide the spinner if 'ready' never arrives.
+                    setTimeout(function () { var sp = document.getElementById('rg-session-spinner'); if (sp) sp.style.display = 'none'; }, 8000);
+                })
+                .catch(function (err) { teardown(); if (window.rgAlert) rgAlert('Connect failed: ' + err.message); });
+        }
+        // Whatever happens, never leave the user on a spinner: connect at the
+        // current size if nothing has settled it within 2.5s.
+        setTimeout(startConnect, 2500);
+    }
+    window.rgLaunchFullscreen = rgLaunchFullscreen;
+
     function openFolder(scope, path) {
         if (typeof window.rgSelectFolder === 'function') { close(); window.rgSelectFolder(scope, path); return; }
         location.href = '/connections.html#open=' + encodeURIComponent(scope + '/' + path);
@@ -344,7 +507,18 @@
             var open = t.closest && t.closest('.search-open-folder');
             if (open) { e.preventDefault(); openFolder(open.getAttribute('data-open-scope'), open.getAttribute('data-open-folder')); return; }
             var conn = t.closest && t.closest('[data-sc-connect]');
-            if (conn) { e.preventDefault(); doConnect(conn.getAttribute('data-scope'), conn.getAttribute('data-folder'), conn.getAttribute('data-sc-connect'), conn); }
+            if (conn) {
+                e.preventDefault();
+                var sc = conn.getAttribute('data-scope'), fo = conn.getAttribute('data-folder'), nm = conn.getAttribute('data-sc-connect');
+                var row = null, si = searchIndex || [];
+                for (var k = 0; k < si.length; k++) { if (si[k].scope === sc && si[k].folderPath === fo && si[k].entry.name === nm) { row = si[k]; break; } }
+                var fsoc = row && row.entry && row.entry.fullscreen_on_connect;
+                // The regular Connect goes zero-click fullscreen in this tab; the
+                // ⧉ button is an explicit "open in a new window", so it keeps the
+                // new-window path.
+                if (fsoc && !conn.classList.contains('btn-connect-win')) { close(); rgLaunchFullscreen(sc, fo, nm, conn); }
+                else doConnect(sc, fo, nm, conn, conn.classList.contains('btn-connect-win'));
+            }
         });
         // Escape closes the overlay from anywhere (not only the search box);
         // capture phase so it runs before page-level handlers. If a facet menu

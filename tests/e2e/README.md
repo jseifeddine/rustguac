@@ -32,6 +32,7 @@ One spec per change, named after the branch that introduced it:
 | `themed-dialogs` | `rgConfirm`/`rgAlert` replace native dialogs |
 | `global-search` | `/` opens the overlay on every signed-in page, folder view untouched; nothing on the login page, for anonymous or viewer callers, or from a previous login's cache |
 | `search-under-modals` | a page modal covers the search box |
+| `zero-click-fullscreen` | #257: same-tab iframe sized from the measured viewport |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`
 re-enables it) and defaults to the admin role; pass `role` to test gating.

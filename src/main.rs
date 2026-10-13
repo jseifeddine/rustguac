@@ -668,7 +668,8 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; \
     connect-src 'self' wss: ws:; \
-    img-src 'self' data: blob:";
+    img-src 'self' data: blob:; \
+    frame-ancestors 'self'";
 
 async fn security_headers(
     tls: Extension<TlsEnabled>,
@@ -678,7 +679,11 @@ async fn security_headers(
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    // SAMEORIGIN (not DENY) so the Connections page can host a session in a
+    // full-viewport same-origin iframe for zero-click fullscreen-on-connect.
+    // Cross-origin framing stays blocked (clickjacking); CSP frame-ancestors
+    // 'self' is the modern equivalent for browsers that honour it.
+    headers.insert("X-Frame-Options", "SAMEORIGIN".parse().unwrap());
     headers.insert(
         "Referrer-Policy",
         "strict-origin-when-cross-origin".parse().unwrap(),
@@ -1919,6 +1924,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_csp_allows_same_origin_framing_only() {
+        // Zero-click fullscreen loads the client in a same-origin iframe
+        // (#257), which needs frame-ancestors 'self'; anything wider would
+        // reopen clickjacking from other origins.
+        let directives: Vec<&str> = CONTENT_SECURITY_POLICY.split(';').map(str::trim).collect();
+        let fa = directives
+            .iter()
+            .find(|d| d.starts_with("frame-ancestors "))
+            .expect("CSP must carry a frame-ancestors directive");
+        let sources: Vec<&str> = fa.split_whitespace().skip(1).collect();
+        assert_eq!(
+            sources,
+            vec!["'self'"],
+            "only the same origin may frame the client"
+        );
+    }
     #[test]
     fn test_csp_allows_data_and_blob_images() {
         // Safari and Firefox draw Guacamole image streams through data: URIs

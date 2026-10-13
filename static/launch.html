@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connecting…</title>
+    <style>
+        :root { --bg: #1a1a2e; --text: #e0e0e0; --text-dim: #888; --accent: #5bc0be; --border: #333; }
+        html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: monospace; }
+        #box { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; }
+        #spinner { width: 30px; height: 30px; margin: 0 auto 1.2em; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #title { font-size: 1.3em; font-weight: bold; margin-bottom: 0.5em; }
+        #status { color: var(--text-dim); font-size: 0.95em; letter-spacing: 0.02em; }
+    </style>
+</head>
+<body>
+    <div id="box"><div><div id="spinner"></div><div id="title"></div><div id="status">Connecting…</div></div></div>
+    <script>
+        // Popup splash for "open in a new window" (⧉). A popup's viewport size
+        // cannot be read reliably from the opener right after window.open (it
+        // reports the opener's size until the new window is laid out), so the
+        // popup measures itself: once loaded and the size has held for 150ms,
+        // it tells the opener, which creates the session at exactly that size
+        // and navigates this window to it. No resize after the first paint.
+        (function () {
+            var q = new URLSearchParams(location.search);
+            var name = q.get('name') || 'Session';
+            document.getElementById('title').textContent = name;
+            document.title = name + ' — connecting…';
+            // Match the site theme (same source as the client page).
+            fetch('/api/auth/status', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
+                var t = d && d.theme; if (!t) return;
+                var u = null; try { u = localStorage.getItem('rustguac_theme'); } catch (e) {}
+                var presets = t.presets || {}, admin = t.admin_preset || 'aurora';
+                var active = u && presets[u] ? u : admin;
+                var colors = (active === admin) ? t.admin_colors : presets[active];
+                if (!colors) return;
+                for (var k in colors) if (Object.prototype.hasOwnProperty.call(colors, k)) document.documentElement.style.setProperty('--' + String(k).replace(/_/g, '-'), colors[k]);
+            }).catch(function () {});
+            if (!window.opener) { document.getElementById('status').textContent = 'Opened directly — returning to Connections…'; setTimeout(function () { location.replace('/connections.html'); }, 1500); return; }
+            var sent = false, timer = null, lastW = 0, lastH = 0;
+            function send() {
+                if (sent) return; sent = true;
+                window.removeEventListener('resize', arm);
+                try { window.opener.postMessage({ rgLaunch: 'size', width: window.innerWidth, height: window.innerHeight }, location.origin); } catch (e) {}
+            }
+            function arm() {
+                lastW = window.innerWidth; lastH = window.innerHeight;
+                clearTimeout(timer);
+                timer = setTimeout(function () { if (window.innerWidth === lastW && window.innerHeight === lastH) send(); else arm(); }, 150);
+            }
+            window.addEventListener('resize', arm);
+            if (document.readyState === 'complete') arm(); else window.addEventListener('load', arm);
+            setTimeout(send, 2000);   // never keep the opener waiting
+        })();
+    </script>
+</body>
+</html>
