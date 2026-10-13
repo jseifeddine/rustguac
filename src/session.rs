@@ -205,6 +205,61 @@ pub struct CreateSessionRequest {
     pub wol_wait_time: Option<u32>,
 }
 
+impl CreateSessionRequest {
+    /// SHA-256 over the target and every credential this request would
+    /// connect with, as hex. Two requests with the same fingerprint would
+    /// open the same connection as the same principal, so a fresh Pending
+    /// session made from one can stand in for the other
+    /// (`SessionManager::find_reusable_session`). A retry with a different
+    /// password, key, domain or jump credential gets a different
+    /// fingerprint and therefore a new session. The hash is never logged
+    /// or returned to a client, and a secret cannot be recovered from it.
+    pub fn credential_fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        // Every field is tagged and length-prefixed, so `("ab", "c")` and
+        // `("a", "bc")` hash differently and an absent field differs from
+        // an empty one.
+        let mut field = |tag: &str, value: Option<&str>| {
+            h.update(tag.as_bytes());
+            match value {
+                Some(v) => {
+                    h.update((v.len() as u64).to_le_bytes());
+                    h.update(v.as_bytes());
+                }
+                None => h.update([0xffu8; 8]),
+            }
+        };
+        let port = self.port.map(|p| p.to_string());
+        let jump_hosts = self
+            .jump_hosts
+            .as_ref()
+            .and_then(|j| serde_json::to_string(j).ok());
+        let jump_port = self.jump_port.map(|p| p.to_string());
+        field("type", Some(&format!("{:?}", self.session_type)));
+        field("host", self.hostname.as_deref());
+        field("port", port.as_deref());
+        field("user", self.username.as_deref());
+        field("pass", self.password.as_deref());
+        field("key", self.private_key.as_deref());
+        field("domain", self.domain.as_deref());
+        field("auth_pkg", self.auth_pkg.as_deref());
+        field("kdc", self.kdc_url.as_deref());
+        field("url", self.url.as_deref());
+        field("jumps", jump_hosts.as_deref());
+        field("jump_host", self.jump_host.as_deref());
+        field("jump_port", jump_port.as_deref());
+        field("jump_user", self.jump_username.as_deref());
+        field("jump_pass", self.jump_password.as_deref());
+        field("jump_key", self.jump_private_key.as_deref());
+        field("container_user", self.container_username.as_deref());
+        field("container_pass", self.container_password.as_deref());
+        field("proxmox_token_id", self.proxmox_token_id.as_deref());
+        field("proxmox_token_secret", self.proxmox_token_secret.as_deref());
+        hex::encode(h.finalize())
+    }
+}
+
 /// Session status in the lifecycle.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -325,6 +380,10 @@ pub struct Session {
     /// (#154). Surfaced verbatim in `SessionInfo` so client.html can
     /// trigger fullscreen on first user gesture after CONNECTED.
     pub fullscreen_on_connect: bool,
+    /// `CreateSessionRequest::credential_fingerprint()` of the request this
+    /// session was created from. Compared, never logged or served, when a
+    /// repeat Connect asks to reuse a Pending session.
+    pub credential_fingerprint: String,
     /// Copied from the source entry's `autohide_side_tabs` flag.
     /// Surfaced in `SessionInfo` so client.html can auto-hide the
     /// clipboard/files side tabs.
@@ -789,6 +848,9 @@ impl SessionManager {
         req: CreateSessionRequest,
         created_by: String,
     ) -> Result<SessionInfo, SessionError> {
+        // Taken before any field of the request is moved out below.
+        let credential_fingerprint = req.credential_fingerprint();
+
         // Enforce session limits (only count active/pending sessions)
         {
             let sessions = self.sessions.read().await;
@@ -918,6 +980,8 @@ impl SessionManager {
                     session_id = %session_id,
                     hostname = %hostname,
                     username = %username,
+                    width,
+                    height,
                     "Creating new SSH session"
                 );
 
@@ -1945,6 +2009,7 @@ impl SessionManager {
             shadow_tokens: Vec::new(),
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
+            credential_fingerprint,
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
         };
 
@@ -2007,6 +2072,45 @@ impl SessionManager {
             result.push(session.info());
         }
         result
+    }
+
+    /// How long after creation a Pending session is offered to a repeat
+    /// Connect instead of a fresh one. Short on purpose: an older Pending
+    /// one, whose guacd may since have gone away, is left to the
+    /// pending-timeout reaper.
+    pub const REUSABLE_PENDING_SECS: i64 = 15;
+
+    /// Find a live session this user can be sent back to instead of opening a
+    /// fresh one for the same address-book entry. Reusing a `Pending` session
+    /// (guacd connected, owner never attached) stops repeat Connect clicks from
+    /// piling up orphans; only a Pending session is reusable, since an owner
+    /// connection consumes the guacd stream and cannot be re-owned.
+    ///
+    /// `credential_fingerprint` is `CreateSessionRequest::credential_fingerprint()`
+    /// of the fully built request, so a session is only reused by a request
+    /// that would connect to the same target with the same credentials. A
+    /// retry with a different password, key or domain (a mistyped prompt)
+    /// never gets the old session, which still holds the old credentials.
+    pub async fn find_reusable_session(
+        &self,
+        created_by: &str,
+        entry_key: &str,
+        credential_fingerprint: &str,
+    ) -> Option<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        for session in sessions.values() {
+            let s = session.lock().await;
+            if s.status == SessionStatus::Pending
+                && s.guacd_stream.is_some()
+                && s.created_by == created_by
+                && s.address_book_entry.as_deref() == Some(entry_key)
+                && s.credential_fingerprint == credential_fingerprint
+                && (Utc::now() - s.created_at).num_seconds() < Self::REUSABLE_PENDING_SECS
+            {
+                return Some(s.info());
+            }
+        }
+        None
     }
 
     /// Get a specific session's info.
@@ -2915,6 +3019,7 @@ mod tests {
             shadow_tokens: Vec::new(),
             share_allowed: true,
             fullscreen_on_connect: false,
+            credential_fingerprint: String::new(),
             autohide_side_tabs: false,
         }
     }
@@ -3454,6 +3559,182 @@ mod tests {
         // The default DriveConfig uses cleanup_on_close=true, retention=0.
         let cfg = DriveConfig::default();
         assert_eq!(drive_cleanup_settings(&Some(cfg)), (true, 0));
+    }
+
+    // ── Pending-session reuse (repeat Connect on an entry) ──
+
+    fn entry_request(extra: serde_json::Value) -> CreateSessionRequest {
+        let mut body = serde_json::json!({
+            "session_type": "rdp",
+            "hostname": "rdp.example.test",
+            "port": 3389,
+            "username": "alice",
+            "password": "correct horse",
+            "domain": "CORP",
+            "address_book_entry": "shared/ops/rdp-1",
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    /// A Pending session as `create_session` leaves it for an entry connect:
+    /// guacd connected (any stream will do here), owner not yet attached.
+    fn pending_entry_session(req: &CreateSessionRequest, created_by: &str) -> Session {
+        let (a, _b) = tokio::io::duplex(64);
+        let mut s = seed_test_session(&format!("tok-{}", Uuid::new_v4()));
+        s.status = SessionStatus::Pending;
+        s.guacd_stream = Some(Box::new(a));
+        s.created_by = created_by.into();
+        s.address_book_entry = req.address_book_entry.clone();
+        s.credential_fingerprint = req.credential_fingerprint();
+        s
+    }
+
+    #[test]
+    fn credential_fingerprint_tracks_target_and_credentials() {
+        let base = entry_request(serde_json::json!({}));
+        let same = entry_request(serde_json::json!({}));
+        assert_eq!(base.credential_fingerprint(), same.credential_fingerprint());
+        assert_eq!(base.credential_fingerprint().len(), 64);
+        // Does not contain a secret in the clear.
+        assert!(!base.credential_fingerprint().contains("correct horse"));
+
+        for (key, value) in [
+            ("password", serde_json::json!("wrong horse")),
+            ("username", serde_json::json!("bob")),
+            ("domain", serde_json::json!("OTHER")),
+            ("private_key", serde_json::json!("-----BEGIN KEY-----")),
+            ("hostname", serde_json::json!("rdp2.example.test")),
+            ("port", serde_json::json!(3390)),
+            ("jump_password", serde_json::json!("hop")),
+        ] {
+            let other = entry_request(serde_json::json!({ key: value }));
+            assert_ne!(
+                base.credential_fingerprint(),
+                other.credential_fingerprint(),
+                "{key} must change the fingerprint"
+            );
+        }
+        // Display params are not part of it: a second click from a resized
+        // window still reuses the session.
+        let resized = entry_request(serde_json::json!({ "width": 800, "height": 600 }));
+        assert_eq!(
+            base.credential_fingerprint(),
+            resized.credential_fingerprint()
+        );
+        // Absent and empty are different, and so is a shifted boundary.
+        let empty_pw = entry_request(serde_json::json!({ "password": "" }));
+        let no_pw = {
+            let mut r = entry_request(serde_json::json!({}));
+            r.password = None;
+            r
+        };
+        assert_ne!(
+            empty_pw.credential_fingerprint(),
+            no_pw.credential_fingerprint()
+        );
+        let ab_c = entry_request(serde_json::json!({ "username": "ab", "password": "c" }));
+        let a_bc = entry_request(serde_json::json!({ "username": "a", "password": "bc" }));
+        assert_ne!(ab_c.credential_fingerprint(), a_bc.credential_fingerprint());
+    }
+
+    #[tokio::test]
+    async fn fresh_pending_session_reused_for_same_entry_and_credentials() {
+        let mgr = new_manager_for_tests();
+        let req = entry_request(serde_json::json!({}));
+        let id = insert_session(&mgr, pending_entry_session(&req, "alice@example.com")).await;
+
+        let again = entry_request(serde_json::json!({}));
+        let found = mgr
+            .find_reusable_session(
+                "alice@example.com",
+                "shared/ops/rdp-1",
+                &again.credential_fingerprint(),
+            )
+            .await
+            .expect("same entry, same credentials, within the window: reused");
+        assert_eq!(found.session_id, id);
+    }
+
+    #[tokio::test]
+    async fn retry_with_different_credentials_gets_a_new_session() {
+        let mgr = new_manager_for_tests();
+        let req = entry_request(serde_json::json!({}));
+        insert_session(&mgr, pending_entry_session(&req, "alice@example.com")).await;
+
+        // A mistyped password at the prompt, retried within 15 s: the old
+        // Pending session holds the old password, so it must not be handed
+        // back.
+        let retry = entry_request(serde_json::json!({ "password": "wrong horse" }));
+        assert!(mgr
+            .find_reusable_session(
+                "alice@example.com",
+                "shared/ops/rdp-1",
+                &retry.credential_fingerprint(),
+            )
+            .await
+            .is_none());
+        let other_user = entry_request(serde_json::json!({ "username": "bob" }));
+        assert!(mgr
+            .find_reusable_session(
+                "alice@example.com",
+                "shared/ops/rdp-1",
+                &other_user.credential_fingerprint(),
+            )
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn reuse_is_scoped_to_user_entry_status_and_age() {
+        let mgr = new_manager_for_tests();
+        let req = entry_request(serde_json::json!({}));
+        let fp = req.credential_fingerprint();
+
+        insert_session(&mgr, pending_entry_session(&req, "alice@example.com")).await;
+        // Another user's identical Pending session is not ours to take.
+        assert!(mgr
+            .find_reusable_session("mallory@example.com", "shared/ops/rdp-1", &fp)
+            .await
+            .is_none());
+        // Nor is the same user's session for a different entry.
+        assert!(mgr
+            .find_reusable_session("alice@example.com", "shared/ops/rdp-2", &fp)
+            .await
+            .is_none());
+
+        // An owner already attached: the stream is consumed, not re-ownable.
+        let mgr = new_manager_for_tests();
+        let mut active = pending_entry_session(&req, "alice@example.com");
+        active.status = SessionStatus::Active;
+        insert_session(&mgr, active).await;
+        assert!(mgr
+            .find_reusable_session("alice@example.com", "shared/ops/rdp-1", &fp)
+            .await
+            .is_none());
+
+        // Older than the window: left to the pending-timeout reaper.
+        let mgr = new_manager_for_tests();
+        let mut stale = pending_entry_session(&req, "alice@example.com");
+        stale.created_at =
+            Utc::now() - chrono::Duration::seconds(SessionManager::REUSABLE_PENDING_SECS + 1);
+        insert_session(&mgr, stale).await;
+        assert!(mgr
+            .find_reusable_session("alice@example.com", "shared/ops/rdp-1", &fp)
+            .await
+            .is_none());
+
+        // No guacd stream (deferred connect): nothing to hand over yet.
+        let mgr = new_manager_for_tests();
+        let mut deferred = pending_entry_session(&req, "alice@example.com");
+        deferred.guacd_stream = None;
+        insert_session(&mgr, deferred).await;
+        assert!(mgr
+            .find_reusable_session("alice@example.com", "shared/ops/rdp-1", &fp)
+            .await
+            .is_none());
     }
 }
 
