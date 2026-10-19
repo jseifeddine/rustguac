@@ -1002,7 +1002,10 @@ async fn run_server(config: Config, database: Db) {
     let ab_changes = api::AddressBookChanges::default();
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
-    let drive_configured = DriveConfigured(config.drive.is_some());
+    let drive_configured = DriveConfigured {
+        configured: config.drive.is_some(),
+        enabled: config.drive.as_ref().is_some_and(|d| d.enabled),
+    };
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
         // Load built-in themes merged with any user themes from

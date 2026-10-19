@@ -855,7 +855,10 @@ pub async fn auth_status(
         "oidc_enabled": oidc_enabled.0,
         "oidc_available": oidc_available,
         "site_title": site_title.0,
-        "drive_configured": drive_configured.0,
+        "drive_configured": drive_configured.configured,
+        // Lets the entry editor hide file transfer from ad-hoc users below
+        // admin when it is off site-wide: their request couldn't turn it on.
+        "drive_enabled": drive_configured.enabled,
     });
     resp["theme"] = json!({
         "admin_preset": theme.admin_preset,
@@ -900,9 +903,12 @@ pub struct OidcHandle(pub Option<crate::oidc::OidcState>);
 #[derive(Clone)]
 pub struct VaultConfigured(pub bool);
 
-/// Marker for whether [drive] is configured.
+/// Whether `[drive]` is configured, and whether it is enabled site-wide.
 #[derive(Clone)]
-pub struct DriveConfigured(pub bool);
+pub struct DriveConfigured {
+    pub configured: bool,
+    pub enabled: bool,
+}
 
 /// Default scope ("local" | "shared") for a new per-user credential variable
 /// (from `[user_credentials_default_scope]`). Only meaningful when more than

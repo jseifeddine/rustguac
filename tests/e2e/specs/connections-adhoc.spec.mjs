@@ -213,3 +213,35 @@ test('an operator gets no button and #adhoc opens nothing', async ({ page }) => 
     await expect(page.locator('#rg-adhoc')).toBeHidden();
     await expect(page.locator('#entry-modal')).not.toHaveClass(/active/);
 });
+
+// A poweruser's ad-hoc request can't turn on a drive the site has off, and
+// VDI limits above the site defaults are capped: the editor must not offer
+// what the server will silently drop.
+test('a poweruser is not offered file transfer when the site has it off', async ({ page }) => {
+    const status = (drive_enabled) => ({
+        oidc_enabled: false, drive_configured: true, drive_enabled, theme: 'dark'
+    });
+    await installApi(page, { role: 'poweruser', routes: { 'GET /api/auth/status': status(false) } });
+    await page.goto('/connections.html');
+    await settle(page);
+    await openEditor(page);
+    await page.locator('#em-type').selectOption('ssh');
+    await expect(page.locator('#em-drive-section')).toBeHidden();
+    await page.locator('#em-type').selectOption('vdi');
+    await expect(page.getByText('above the site\'s defaults are capped')).toBeVisible();
+});
+
+test('file transfer is offered when the site has it on, and always to admins', async ({ page }) => {
+    for (const [role, drive_enabled] of [['poweruser', true], ['admin', false]]) {
+        await page.unrouteAll({ behavior: 'ignoreErrors' });
+        await installApi(page, { role, routes: { 'GET /api/auth/status': {
+            oidc_enabled: false, drive_configured: true, drive_enabled, theme: 'dark'
+        } } });
+        await page.goto('/connections.html');
+        await settle(page);
+        await openEditor(page);
+        await page.locator('#em-type').selectOption('ssh');
+        await expect(page.locator('#em-drive-section'), `${role}, drive_enabled=${drive_enabled}`).toBeVisible();
+        if (role === 'admin') await expect(page.getByText('above the site\'s defaults are capped')).toBeHidden();
+    }
+});

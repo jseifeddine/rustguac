@@ -642,6 +642,8 @@
         #entry-modal.adhoc .adhoc-hide,
         #entry-modal.adhoc.adhoc-restricted .entry-only,
         #entry-modal:not(.adhoc-restricted) .adhoc-restricted-only { display: none !important; }
+        /* A non-admin's ad-hoc request can't turn on a drive the site has off. */
+        #entry-modal.adhoc.adhoc-restricted.drive-off #em-drive-section { display: none !important; }
         .var-pick { margin-top: 0.3em; font-size: 0.85em; width: auto; max-width: 100%; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
@@ -1117,6 +1119,7 @@
                 <label>Idle Timeout <span style="color:var(--text-muted);font-size:0.85em">(optional, minutes)</span>
                     <input type="number" id="em-vdi-idle-timeout" min="0" placeholder="e.g. 60 (0 = use global default)">
                 </label>
+                <div class="field-hint adhoc-restricted-only">CPU, memory and idle timeout above the site's defaults are capped at those defaults.</div>
                 <label>Banner <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                     <input type="text" id="em-vdi-banner" placeholder="Shown before session starts (user must click Continue)">
                 </label>
@@ -1449,6 +1452,7 @@
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Connections';document.querySelector('h1').textContent=d.site_title;}
             _driveConfigured = !!d.drive_configured;
+            document.getElementById('entry-modal').classList.toggle('drive-off', !d.drive_enabled);
             initTheme(d.theme);
         });
         var apiKey = sessionStorage.getItem('rustguac_api_key');
