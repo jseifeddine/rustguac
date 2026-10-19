@@ -194,7 +194,8 @@ other scopes keep working.
 When `[vault_local]` is used, set its `instance_name` to the value the data was
 originally stored under, so the `instance/<name>/` paths line up. Splitting an
 existing single-Vault deployment is a one-time copy with the `vault-migrate`
-subcommand (see the [migration guide](migration.md)).
+subcommand (see
+[Splitting to multiple Vaults](migration.md#splitting-to-multiple-vaults-disaster-recovery)).
 
 ```toml
 # Primary/local Vault (always reachable on this instance)

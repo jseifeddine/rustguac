@@ -57,7 +57,7 @@ sudo ./contrib/vault-quickstart.sh --local
 
 See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for the manual walkthrough, mTLS, multi-instance setup, and the security caveat for `--local` mode.
 
-6. **(Optional) Set up encrypted drive storage:**
+5. **(Optional) Set up encrypted drive storage:**
 
 ```bash
 sudo /opt/rustguac/bin/drive-setup.sh
@@ -65,7 +65,7 @@ sudo /opt/rustguac/bin/drive-setup.sh
 
 See [Drive / File Transfer](integrations.md#drive--file-transfer--luks-encryption) for details.
 
-7. **(Optional) Enable VDI desktop containers:**
+6. **(Optional) Enable VDI desktop containers:**
 
 If you want to use VDI sessions (ephemeral Docker desktop containers), install Docker and grant rustguac access:
 
