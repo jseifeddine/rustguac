@@ -44,13 +44,13 @@ This installs rustguac + guacd to `/opt/rustguac` with systemd services.
 ### Docker (recommended for non-Debian-13 hosts)
 
 ```bash
-docker pull ghcr.io/sol1/rustguac:latest
+docker pull sol1/rustguac:latest
 docker run -d \
   -p 443:8089 \
   -v rustguac-data:/opt/rustguac/data \
   -v rustguac-recordings:/opt/rustguac/recordings \
   -v ./config.toml:/opt/rustguac/config.toml \
-  ghcr.io/sol1/rustguac:latest
+  sol1/rustguac:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
