@@ -1,0 +1,107 @@
+# Screenshot environment: rustguac with OpenBao (dev mode), a mock OIDC
+# provider and throwaway SSH and web targets. See README.md.
+#
+# Nothing is published on the host. The capture service reaches everything
+# over the compose network and writes PNGs to ./out.
+
+name: rustguac-screenshots
+
+services:
+  openbao:
+    image: openbao/openbao:${OPENBAO_VERSION:-2.7.1}
+    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+
+  openbao-init:
+    image: openbao/openbao:${OPENBAO_VERSION:-2.7.1}
+    entrypoint: ["/bin/sh", "/openbao-init.sh"]
+    volumes:
+      - ./openbao-init.sh:/openbao-init.sh:ro
+    depends_on:
+      - openbao
+
+  oidc:
+    image: ghcr.io/navikt/mock-oauth2-server:${MOCK_OAUTH2_SERVER_VERSION:-2.1.10}
+    environment:
+      SERVER_PORT: "8080"
+      JSON_CONFIG: '{"interactiveLogin": true}'
+
+  # Pre-provision the admin who signs in to seed everything else.
+  rustguac-init:
+    image: ${RUSTGUAC_IMAGE:-sol1/rustguac:1.12.1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml list-users
+        | grep -q alex@example.com
+        || /opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml add-user
+        --email alex@example.com --role admin --name "Alex Rivera"
+    volumes:
+      - ./config.toml:/opt/rustguac/config.toml:ro
+      - data:/opt/rustguac/data
+
+  rustguac:
+    image: ${RUSTGUAC_IMAGE:-sol1/rustguac:1.12.1}
+    environment:
+      VAULT_SECRET_ID: screenshots-secret
+    shm_size: 1gb
+    # Chromium's sandbox for Web sessions needs namespace syscalls that
+    # Docker's default seccomp profile blocks (#307). Acceptable for this
+    # throwaway local environment; not a production setting.
+    security_opt:
+      - seccomp=unconfined
+    volumes:
+      - ./config.toml:/opt/rustguac/config.toml:ro
+      - data:/opt/rustguac/data
+      - recordings:/opt/rustguac/recordings
+    depends_on:
+      openbao-init:
+        condition: service_completed_successfully
+      rustguac-init:
+        condition: service_completed_successfully
+      oidc:
+        condition: service_started
+
+  ssh:
+    build:
+      context: targets/ssh
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION:-3.20}
+    networks:
+      default:
+        aliases:
+          - app-01.example.internal
+          - app-02.example.internal
+          - stg-app-01.example.internal
+          - db-01.example.internal
+          - jump-db.example.internal
+          - bastion.example.com
+
+  web:
+    image: nginx:${NGINX_VERSION:-1.27-alpine}
+    volumes:
+      - ./targets/web/index.html:/usr/share/nginx/html/index.html:ro
+    networks:
+      default:
+        aliases:
+          - status.example.internal
+
+  capture:
+    build:
+      context: capture
+      args:
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.48.2}
+    profiles: ["capture"]
+    shm_size: 1gb
+    environment:
+      RUSTGUAC_URL: https://rustguac:8089
+      THEMES: ${THEMES:-aurora,light}
+    volumes:
+      - ./out:/out
+    depends_on:
+      - rustguac
+      - ssh
+      - web
+
+volumes:
+  data:
+  recordings:
