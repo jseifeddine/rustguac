@@ -1309,9 +1309,15 @@ async fn run_server(config: Config, database: Db) {
     // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs)
     let ws_ticket_store = auth::WsTicketStore::new();
 
-    // Session creation route (rate-limited only when enabled)
+    // Session creation routes (rate-limited only when enabled). Ad-hoc
+    // connections from the Connections page create sessions too, so they
+    // share the limit.
     let mut session_create_route = Router::new()
         .route("/api/sessions", post(api::create_session))
+        .route(
+            "/api/addressbook/adhoc/connect",
+            post(api::ab_adhoc_connect),
+        )
         .with_state(manager.clone());
     if rate_limit_enabled {
         let conf = GovernorConfigBuilder::default()

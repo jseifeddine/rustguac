@@ -296,8 +296,8 @@ things are required: `typescript_path` must be set here (the global "where"),
 and the individual connection entry must have **Enable typescript recording
 for this session** ticked in its Recording Settings (Connections page, SSH
 entries only). A connection with the box unticked, or any session that is not
-SSH, writes no typescript. Ad-hoc SSH sessions from the Sessions page have no
-entry and so never record a typescript.
+SSH, writes no typescript. Ad-hoc SSH connections (Connect to a host) have no
+entry; for a non-admin they never record a typescript.
 
 The typescript is produced by guacd, so `typescript_path` must be writable by
 the guacd process. On a standard install guacd runs as the same `rustguac`

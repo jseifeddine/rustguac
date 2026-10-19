@@ -41,7 +41,7 @@ This starts both `rustguac-guacd` (the protocol daemon) and `rustguac` (the web 
 
 4. **(Required for connections) Set up Vault or OpenBao:**
 
-The connections page is rustguac's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only run ad-hoc sessions via the Sessions page or the API.
+The connections page is rustguac's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only open ad-hoc connections (**Connect to a host**, beside the search box on every page) or use the API.
 
 For a single-host install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 

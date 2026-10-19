@@ -28,13 +28,15 @@ One spec per change, named after the branch that introduced it:
 | `connections-folder-filter` | #254: live filter box, ARIA tree, arrow keys, `f` shortcut |
 | `connections-app-shell` | #254: clipped body, two scroll panes, folder change scrolls the pane not the page |
 | `role-nav` | one nav on every page, gated by `data-role-level` |
-| `sessions-adhoc-modal` | ad-hoc form opens as a modal |
+| `sessions-adhoc-modal` | #295: Sessions has no ad-hoc form or button of its own; the global button there opens the editor on Connections |
+| `adhoc-button` | #295: search.js's Connect to a host beside the box on every search page, for poweruser and admin, in place on Connections and via `#adhoc` elsewhere; never for operator, viewer, signed out or on the login page; gone on expiry and logout; shown without Vault; API key confirmed first |
 | `facet-filters` | shared facets narrow lists, persist, combine with search |
 | `folder-display-name` | display name over the key, modal field round-trips |
 | `themed-dialogs` | `rgConfirm`/`rgAlert` replace native dialogs |
 | `global-search` | `/` opens the overlay on every signed-in page, folder view untouched; nothing on the login page, for anonymous or viewer callers, or from a previous login's cache |
-| `search-under-modals` | a page modal covers the search box |
+| `search-under-modals` | a page modal (the ad-hoc editor included) covers the search box |
 | `zero-click-fullscreen` | #257: same-tab iframe sized from the measured viewport |
+| `connections-adhoc` | #295: Connect to a host opens the entry editor in ad-hoc mode (no name, Connect for Save, entry-only options hidden for non-admins), offers the caller's credential variable names, posts to `/api/addressbook/adhoc/connect` and never `/api/sessions`; ephemeral keypair; missing variable named; admin Save as entry keeps `$var` references; works without Vault and from `#adhoc`; no button for operators |
 | `recordings-mp4` | #241: the mp4 button converts, shows progress and downloads; refused while live; hidden without server support |
 
 The fixture suppresses the first-visit onboarding tour (`options.onboarding`

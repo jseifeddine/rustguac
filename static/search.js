@@ -13,7 +13,11 @@
  * Only an authenticated operator or above gets the box: the server writes the
  * caller's role on <html data-role-level> (0 anonymous ... 4 admin), and an
  * API-key user, who is served the anonymous variant, is confirmed through
- * /api/me first. The cached index is keyed to that identity and dropped the
+ * /api/me first. A poweruser or above also gets "Connect to a host" beside
+ * it, for an ad-hoc connection: it opens the editor in place on the
+ * connections page (window.rgOpenAdhoc) and /connections.html#adhoc
+ * elsewhere. It needs no Vault, so it shows even when the box has nothing to
+ * search, and it goes with the box when the identity is dropped. The cached index is keyed to that identity and dropped the
  * moment the server stops recognising it (logout, expiry, a different user in
  * the same tab), so nothing of one user's address book is ever shown to the
  * next, nor on the login page.
@@ -24,6 +28,7 @@
     window.__rgGlobalSearch = true;
 
     var searchIndex = null, searchEngaged = false, searchFilters = null;
+    var confirmedLevel = null; // role level /api/me answered with
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -74,6 +79,23 @@
         document.body.appendChild(ov);
     }
 
+    // "Connect to a host": poweruser and above, the server's can_connect_adhoc.
+    var ADHOC_LEVEL = 3;
+    function injectAdhoc(level) {
+        var brand = document.querySelector('.brand-row');
+        if (!brand || level == null || level < ADHOC_LEVEL || document.getElementById('rg-adhoc')) return;
+        var b = document.createElement('button');
+        b.type = 'button'; b.id = 'rg-adhoc'; b.className = 'btn-add global-adhoc';
+        b.title = 'Connect to a host that is not a saved entry, with every option an entry has. Nothing is saved.';
+        b.innerHTML = '&#9889; Connect to a host';
+        b.addEventListener('click', function () {
+            if (typeof window.rgOpenAdhoc === 'function') window.rgOpenAdhoc();
+            else window.location.href = '/connections.html#adhoc';
+        });
+        brand.appendChild(b);
+    }
+    function removeAdhoc() { var b = document.getElementById('rg-adhoc'); if (b) b.parentNode.removeChild(b); }
+
     function input() { return document.getElementById('rg-search'); }
     function overlay() { return document.getElementById('search-overlay'); }
 
@@ -101,6 +123,7 @@
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
         var gs = document.getElementById('global-search'); if (gs) gs.parentNode.removeChild(gs);
         var ov = overlay(); if (ov) ov.parentNode.removeChild(ov);
+        removeAdhoc();
         document.body.classList.remove('search-engaged');
         searchEngaged = false;
     }
@@ -579,6 +602,7 @@
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (me) {
                 if (!me || !me.role || (ROLE_LEVEL[me.role] || 0) < MIN_LEVEL) return null;
+                confirmedLevel = ROLE_LEVEL[me.role];
                 return (me.name || '') + '|' + me.role + '|' + (me.groups || []).join(',');
             })
             .catch(function () { return null; });
@@ -604,11 +628,18 @@
         // it) is confirmed first and gets the box only on a yes.
         if (level != null && level >= MIN_LEVEL) {
             injectUI();
-            whoAmI().then(function (who) { if (who) boot(who); else signedOut(); });
+            injectAdhoc(level);
+            whoAmI().then(function (who) {
+                if (!who) { signedOut(); return; }
+                // The server's answer wins over the page's.
+                if (confirmedLevel < ADHOC_LEVEL) removeAdhoc(); else injectAdhoc(confirmedLevel);
+                boot(who);
+            });
         } else {
             whoAmI().then(function (who) {
                 if (!who) { dropCache(); return; }
                 injectUI();
+                injectAdhoc(confirmedLevel);
                 boot(who);
             });
         }

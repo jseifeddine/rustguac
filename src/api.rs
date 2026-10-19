@@ -42,7 +42,7 @@ pub async fn create_session(
 
     // Require poweruser+ role for ad-hoc session creation
     if let Some(ref id) = identity {
-        if !id.has_role("poweruser") {
+        if !can_connect_adhoc(id) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "insufficient permissions — poweruser role required for ad-hoc sessions"})),
@@ -77,7 +77,50 @@ pub async fn create_session(
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip = client_ip(&headers, addr.ip(), &proxies);
 
-    let target = match req.session_type {
+    let target = session_target(&req);
+
+    tracing::info!(
+        admin = %admin_name,
+        caller = %caller_name,
+        client_ip = %client_ip,
+        session_type = ?req.session_type,
+        target = %target,
+        "Session creation requested"
+    );
+
+    match manager.create_session(req, admin_name.clone()).await {
+        Ok(info) => {
+            tracing::info!(
+                admin = %admin_name,
+                client_ip = %client_ip,
+                session_id = %info.session_id,
+                session_type = ?info.session_type,
+                target = %target,
+                "Session created successfully"
+            );
+            (StatusCode::CREATED, Json(json!(info))).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            tracing::error!(
+                admin = %admin_name,
+                client_ip = %client_ip,
+                target = %target,
+                error = %msg,
+                "Session creation failed"
+            );
+            let status = match &e {
+                crate::session::SessionError::ValidationError(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            (status, Json(json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
+/// A short description of what a session request connects to, for the log.
+fn session_target(req: &CreateSessionRequest) -> String {
+    match req.session_type {
         crate::session::SessionType::Ssh => {
             format!(
                 "{}:{}",
@@ -118,44 +161,6 @@ pub async fn create_session(
         crate::session::SessionType::Web => req.url.as_deref().unwrap_or("?").to_string(),
         crate::session::SessionType::Vdi => {
             req.container_image.as_deref().unwrap_or("?").to_string()
-        }
-    };
-
-    tracing::info!(
-        admin = %admin_name,
-        caller = %caller_name,
-        client_ip = %client_ip,
-        session_type = ?req.session_type,
-        target = %target,
-        "Session creation requested"
-    );
-
-    match manager.create_session(req, admin_name.clone()).await {
-        Ok(info) => {
-            tracing::info!(
-                admin = %admin_name,
-                client_ip = %client_ip,
-                session_id = %info.session_id,
-                session_type = ?info.session_type,
-                target = %target,
-                "Session created successfully"
-            );
-            (StatusCode::CREATED, Json(json!(info))).into_response()
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            tracing::error!(
-                admin = %admin_name,
-                client_ip = %client_ip,
-                target = %target,
-                error = %msg,
-                "Session creation failed"
-            );
-            let status = match &e {
-                crate::session::SessionError::ValidationError(_) => StatusCode::BAD_REQUEST,
-                _ => StatusCode::BAD_GATEWAY,
-            };
-            (status, Json(json!({ "error": msg }))).into_response()
         }
     }
 }
@@ -3784,9 +3789,9 @@ pub async fn ssh_probe_host_key(
     identity: Option<Extension<AuthIdentity>>,
     axum::Json(body): axum::Json<ProbeHostKeyRequest>,
 ) -> impl IntoResponse {
-    // Require admin or poweruser
+    // Used while filling in an entry or an ad-hoc connection.
     match &identity {
-        Some(Extension(id)) if id.has_role("poweruser") => {}
+        Some(Extension(id)) if id.has_role("admin") || can_connect_adhoc(id) => {}
         _ => {
             return (
                 StatusCode::FORBIDDEN,
@@ -3912,6 +3917,173 @@ fn round_down_mod16(v: u32) -> u32 {
     }
 }
 
+/// The session type an entry's `type` names, or `None` for an unknown one.
+fn entry_session_type(entry_type: &str) -> Option<SessionType> {
+    Some(match entry_type {
+        "ssh" => SessionType::Ssh,
+        "rdp" => SessionType::Rdp,
+        "vnc" => SessionType::Vnc,
+        "spice" => SessionType::Spice,
+        "proxmox" => SessionType::Proxmox,
+        "web" => SessionType::Web,
+        "vdi" => SessionType::Vdi,
+        _ => return None,
+    })
+}
+
+/// How the browser that asked will draw the session: never part of an entry.
+pub struct EntryDisplay {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub dpi: Option<u32>,
+}
+
+/// The saved entry a session comes from, for its recording and reports.
+pub struct EntryRef {
+    /// `scope/folder/entry`.
+    pub key: String,
+    pub folder: String,
+}
+
+/// The session request a connection entry describes. The one conversion
+/// used by the Connections connect endpoint, `/api/connect` links and
+/// ad-hoc connections, so an option added to entries works in all three.
+///
+/// `attribution` names the saved entry the session belongs to; an ad-hoc
+/// connection has none, and its entry's display name is then not used
+/// either. The request is returned unfenced and unfiltered: an ad-hoc
+/// caller's request still has to go through
+/// `crate::session::apply_adhoc_policy`.
+pub fn session_request_from_entry(
+    entry: AddressBookEntry,
+    display: EntryDisplay,
+    attribution: Option<EntryRef>,
+) -> Result<CreateSessionRequest, String> {
+    let session_type = entry_session_type(&entry.session_type)
+        .ok_or_else(|| format!("unknown session type: {}", entry.session_type))?;
+    let (address_book_entry, address_book_folder, entry_display_name) = match attribution {
+        Some(r) => (Some(r.key), Some(r.folder), entry.display_name),
+        None => (None, None, None),
+    };
+    Ok(CreateSessionRequest {
+        session_type,
+        hostname: entry.hostname,
+        port: entry.port,
+        username: entry.username,
+        password: entry.password,
+        private_key: entry.private_key,
+        generate_keypair: None,
+        url: entry.url,
+        domain: entry.domain,
+        security: entry.security,
+        server_layout: entry.server_layout,
+        ignore_cert: entry.ignore_cert,
+        auth_pkg: entry.auth_pkg,
+        kdc_url: entry.kdc_url,
+        kerberos_cache: None,
+        color_depth: entry.color_depth,
+        jump_hosts: entry.jump_hosts,
+        jump_host: None,
+        jump_port: None,
+        jump_username: None,
+        jump_password: None,
+        jump_private_key: None,
+        width: display.width,
+        height: display.height,
+        dpi: display.dpi,
+        banner: entry.banner,
+        enable_drive: entry.enable_drive,
+        remote_app: entry.remote_app,
+        remote_app_dir: entry.remote_app_dir,
+        remote_app_args: entry.remote_app_args,
+        enable_recording: entry.enable_recording,
+        record_typescript: entry.record_typescript,
+        address_book_entry,
+        address_book_folder,
+        entry_display_name,
+        max_recordings: entry.max_recordings,
+        login_script: entry.login_script,
+        autofill: entry.autofill,
+        allowed_domains: entry.allowed_domains,
+        disable_copy: entry.disable_copy,
+        disable_paste: entry.disable_paste,
+        enable_gfx: entry.enable_gfx,
+        enable_desktop_composition: entry.enable_desktop_composition,
+        enable_wallpaper: entry.enable_wallpaper,
+        enable_theming: entry.enable_theming,
+        enable_full_window_drag: entry.enable_full_window_drag,
+        force_lossless: entry.force_lossless,
+        enable_h264: entry.enable_h264,
+        container_image: entry.container_image,
+        container_cpu_limit: entry.container_cpu_limit,
+        container_memory_limit: entry.container_memory_limit,
+        container_env: entry.container_env,
+        container_idle_timeout_mins: entry.container_idle_timeout_mins,
+        container_username: entry.container_username,
+        container_password: entry.container_password,
+        allow_sharing: entry.allow_sharing,
+        fullscreen_on_connect: entry.fullscreen_on_connect,
+        autohide_side_tabs: entry.autohide_side_tabs,
+        spice_tls: entry.spice_tls,
+        spice_tls_port: entry.spice_tls_port,
+        spice_ca_cert: entry.spice_ca_cert,
+        spice_cert_subject: entry.spice_cert_subject,
+        spice_proxy: entry.spice_proxy,
+        proxmox_url: entry.proxmox_url,
+        proxmox_node: entry.proxmox_node,
+        proxmox_vmid: entry.proxmox_vmid,
+        proxmox_token_id: entry.proxmox_token_id,
+        proxmox_token_secret: entry.proxmox_token_secret,
+        proxmox_verify_tls: entry.proxmox_verify_tls,
+        max_monitors: entry.max_monitors,
+        owner: None,
+        fence_all_targets: false,
+        ssh_font_size: entry.ssh_font_size,
+        wol_send_packet: entry.wol_send_packet,
+        wol_mac_addr: entry.wol_mac_addr,
+        wol_broadcast_addr: entry.wol_broadcast_addr,
+        wol_udp_port: entry.wol_udp_port,
+        wol_wait_time: entry.wol_wait_time,
+    })
+}
+
+/// The session request for connecting a saved entry from the Connections
+/// page: the entry, with the credentials and banner the user was prompted
+/// for (never stored) in place of its own, at the size the page asked for.
+fn entry_connect_request(
+    mut ab_entry: AddressBookEntry,
+    req: ConnectRequest,
+    entry_key: &str,
+    folder: &str,
+) -> Result<CreateSessionRequest, String> {
+    ab_entry.username = req.username.or(ab_entry.username);
+    ab_entry.password = req.password.or(ab_entry.password);
+    ab_entry.domain = req.domain.or(ab_entry.domain);
+    ab_entry.banner = req.banner.or(ab_entry.banner);
+    let (width, height) = initial_session_size(
+        &ab_entry.session_type,
+        ab_entry.fullscreen_on_connect.unwrap_or(false),
+        (req.width, req.height),
+        (req.screen_width, req.screen_height),
+    );
+    let display = EntryDisplay {
+        width,
+        height,
+        dpi: req.dpi,
+    };
+    let attribution = EntryRef {
+        key: entry_key.to_string(),
+        folder: folder.to_string(),
+    };
+    session_request_from_entry(ab_entry, display, Some(attribution))
+}
+
+/// Whether `id` may open ad-hoc connections: sessions to a target of their
+/// own choosing rather than a saved entry. The one place that decides it.
+pub fn can_connect_adhoc(id: &AuthIdentity) -> bool {
+    id.has_role("poweruser")
+}
+
 /// POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect — Create session from entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn ab_connect_entry(
@@ -3995,112 +4167,12 @@ pub async fn ab_connect_entry(
         ab_entry
     };
 
-    // Map address book entry type to SessionType
-    let session_type = match ab_entry.session_type.as_str() {
-        "ssh" => SessionType::Ssh,
-        "rdp" => SessionType::Rdp,
-        "vnc" => SessionType::Vnc,
-        "spice" => SessionType::Spice,
-        "proxmox" => SessionType::Proxmox,
-        "web" => SessionType::Web,
-        "vdi" => SessionType::Vdi,
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("unknown session type: {}", other)})),
-            )
-                .into_response()
-        }
-    };
-
-    // Build CreateSessionRequest from the Vault entry + connect request display params.
-    // ConnectRequest credentials override address book values (for prompted credentials).
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
-    let (initial_width, initial_height) = initial_session_size(
-        &ab_entry.session_type,
-        ab_entry.fullscreen_on_connect.unwrap_or(false),
-        (req.width, req.height),
-        (req.screen_width, req.screen_height),
-    );
-    let create_req = CreateSessionRequest {
-        session_type,
-        hostname: ab_entry.hostname,
-        port: ab_entry.port,
-        username: req.username.or(ab_entry.username),
-        password: req.password.or(ab_entry.password),
-        private_key: ab_entry.private_key,
-        generate_keypair: None,
-        url: ab_entry.url,
-        domain: req.domain.or(ab_entry.domain),
-        security: ab_entry.security,
-        server_layout: ab_entry.server_layout,
-        ignore_cert: ab_entry.ignore_cert,
-        auth_pkg: ab_entry.auth_pkg,
-        kdc_url: ab_entry.kdc_url,
-        kerberos_cache: None,
-        color_depth: ab_entry.color_depth,
-        jump_hosts: ab_entry.jump_hosts,
-        jump_host: None,
-        jump_port: None,
-        jump_username: None,
-        jump_password: None,
-        jump_private_key: None,
-        width: initial_width,
-        height: initial_height,
-        dpi: req.dpi,
-        banner: req.banner.or(ab_entry.banner),
-        enable_drive: ab_entry.enable_drive,
-        remote_app: ab_entry.remote_app,
-        remote_app_dir: ab_entry.remote_app_dir,
-        remote_app_args: ab_entry.remote_app_args,
-        enable_recording: ab_entry.enable_recording,
-        record_typescript: ab_entry.record_typescript,
-        address_book_entry: Some(ab_entry_key.clone()),
-        address_book_folder: Some(folder.to_string()),
-        entry_display_name: ab_entry.display_name.clone(),
-        max_recordings: ab_entry.max_recordings,
-        login_script: ab_entry.login_script,
-        autofill: ab_entry.autofill,
-        allowed_domains: ab_entry.allowed_domains,
-        disable_copy: ab_entry.disable_copy,
-        disable_paste: ab_entry.disable_paste,
-        enable_gfx: ab_entry.enable_gfx,
-        enable_desktop_composition: ab_entry.enable_desktop_composition,
-        enable_wallpaper: ab_entry.enable_wallpaper,
-        enable_theming: ab_entry.enable_theming,
-        enable_full_window_drag: ab_entry.enable_full_window_drag,
-        force_lossless: ab_entry.force_lossless,
-        enable_h264: ab_entry.enable_h264,
-        container_image: ab_entry.container_image,
-        container_cpu_limit: ab_entry.container_cpu_limit,
-        container_memory_limit: ab_entry.container_memory_limit,
-        container_env: ab_entry.container_env,
-        container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-        container_username: ab_entry.container_username,
-        container_password: ab_entry.container_password,
-        allow_sharing: ab_entry.allow_sharing,
-        fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-        autohide_side_tabs: ab_entry.autohide_side_tabs,
-        spice_tls: ab_entry.spice_tls,
-        spice_tls_port: ab_entry.spice_tls_port,
-        spice_ca_cert: ab_entry.spice_ca_cert,
-        spice_cert_subject: ab_entry.spice_cert_subject,
-        spice_proxy: ab_entry.spice_proxy,
-        proxmox_url: ab_entry.proxmox_url,
-        proxmox_node: ab_entry.proxmox_node,
-        proxmox_vmid: ab_entry.proxmox_vmid,
-        proxmox_token_id: ab_entry.proxmox_token_id,
-        proxmox_token_secret: ab_entry.proxmox_token_secret,
-        proxmox_verify_tls: ab_entry.proxmox_verify_tls,
-        max_monitors: ab_entry.max_monitors,
-        owner: None,
-        fence_all_targets: false,
-        ssh_font_size: ab_entry.ssh_font_size,
-        wol_send_packet: ab_entry.wol_send_packet,
-        wol_mac_addr: ab_entry.wol_mac_addr,
-        wol_broadcast_addr: ab_entry.wol_broadcast_addr,
-        wol_udp_port: ab_entry.wol_udp_port,
-        wol_wait_time: ab_entry.wol_wait_time,
+    let create_req = match entry_connect_request(ab_entry, req, &ab_entry_key, &folder) {
+        Ok(r) => r,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+        }
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -4151,6 +4223,199 @@ pub async fn ab_connect_entry(
                 _ => StatusCode::BAD_GATEWAY,
             };
             (status, Json(json!({"error": msg}))).into_response()
+        }
+    }
+}
+
+/// Where an ad-hoc connection's credential variables are read from: the
+/// caller's own My Credentials and nothing else. A trait so the resolution
+/// is testable without a Vault.
+#[allow(async_fn_in_trait)]
+pub trait UserCredentialSource {
+    async fn user_credentials(
+        &self,
+        email: &str,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError>;
+}
+
+impl UserCredentialSource for VaultBackends {
+    async fn user_credentials(
+        &self,
+        email: &str,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+        self.get_user_credentials(email).await
+    }
+}
+
+/// Fill in the `$variable` references of an ad-hoc connection from the
+/// caller's own credential variables, as a saved entry's are at connect.
+/// `creds` is `None` when no Vault is configured: then nothing is resolved.
+///
+/// Unlike a saved entry, nothing else is filled in. An ad-hoc connection
+/// belongs to no folder, so folder default credentials never apply.
+async fn resolve_adhoc_entry<S: UserCredentialSource>(
+    mut entry: AddressBookEntry,
+    id: &AuthIdentity,
+    creds: Option<&S>,
+) -> Result<AddressBookEntry, AdhocEntryError> {
+    entry.normalize_jump_hosts();
+    if crate::vault::entry_credential_variables(&entry).is_empty() {
+        return Ok(entry);
+    }
+    let AuthIdentity::User { email, .. } = id else {
+        return Err(AdhocEntryError::ApiKeyVariables);
+    };
+    let Some(creds) = creds else {
+        return Ok(entry);
+    };
+    let user_creds = creds.user_credentials(email).await.unwrap_or_else(|e| {
+        tracing::warn!("Failed to read user credentials from Vault: {}", e);
+        std::collections::HashMap::new()
+    });
+    crate::vault::resolve_credential_variables(&entry, &user_creds)
+        .map_err(AdhocEntryError::MissingVariables)
+}
+
+/// Why an ad-hoc connection's credential variables could not be resolved.
+#[derive(Debug, PartialEq)]
+enum AdhocEntryError {
+    /// The caller is an API key, which has no credential variables.
+    ApiKeyVariables,
+    /// The caller has no variable of these names.
+    MissingVariables(Vec<String>),
+}
+
+impl IntoResponse for AdhocEntryError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::ApiKeyVariables => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "credential variables belong to a signed-in user; an API key has none"
+                })),
+            )
+                .into_response(),
+            Self::MissingVariables(missing) => (
+                StatusCode::PRECONDITION_FAILED,
+                Json(json!({
+                    "error": "missing credential variables",
+                    "missing_variables": missing,
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+/// The session request for an ad-hoc connection, under the ad-hoc policy.
+fn adhoc_session_request(
+    entry: AddressBookEntry,
+    req: &AdhocConnectRequest,
+    is_admin: bool,
+    config: &crate::config::Config,
+) -> Result<CreateSessionRequest, String> {
+    let (width, height) = initial_session_size(
+        &entry.session_type,
+        entry.fullscreen_on_connect.unwrap_or(false),
+        (req.width, req.height),
+        (req.screen_width, req.screen_height),
+    );
+    let display = EntryDisplay {
+        width,
+        height,
+        dpi: req.dpi,
+    };
+    let mut create_req = session_request_from_entry(entry, display, None)?;
+    create_req.generate_keypair = req.generate_keypair.filter(|&g| g);
+    crate::session::apply_adhoc_policy(&mut create_req, is_admin, config);
+    Ok(create_req)
+}
+
+/// Body of `POST /api/addressbook/adhoc/connect`.
+#[derive(Deserialize)]
+pub struct AdhocConnectRequest {
+    /// The connection, in the form a saved entry takes. Its name, folder
+    /// and the like are not used.
+    pub entry: AddressBookEntry,
+    /// SSH: generate an ephemeral keypair (ad-hoc only; shown in a banner).
+    #[serde(default)]
+    pub generate_keypair: Option<bool>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub screen_width: Option<u32>,
+    #[serde(default)]
+    pub screen_height: Option<u32>,
+    #[serde(default)]
+    pub dpi: Option<u32>,
+}
+
+/// POST /api/addressbook/adhoc/connect — Connect to a host that is not a
+/// saved entry, described with every option an entry has. Poweruser+.
+/// Credential variables resolve from the caller's own; folder defaults
+/// never apply. Non-admins get the ad-hoc policy (`apply_adhoc_policy`).
+#[allow(clippy::too_many_arguments)]
+pub async fn ab_adhoc_connect(
+    State(manager): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(vault): Extension<VaultState>,
+    Extension(vault_configured): Extension<VaultConfigured>,
+    Json(mut req): Json<AdhocConnectRequest>,
+) -> Response {
+    let id = match identity {
+        Some(Extension(id)) if can_connect_adhoc(&id) => id,
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "insufficient permissions — poweruser role required for ad-hoc connections"})),
+            )
+                .into_response()
+        }
+    };
+
+    let creds = vault_configured.0.then_some(vault.as_ref());
+    let entry = match resolve_adhoc_entry(std::mem::take(&mut req.entry), &id, creds).await {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+    let create_req =
+        match adhoc_session_request(entry, &req, id.has_role("admin"), manager.config()) {
+            Ok(r) => r,
+            Err(msg) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+            }
+        };
+
+    let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
+    let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
+    let user = id.display_name().to_string();
+    let target = session_target(&create_req);
+    tracing::info!(
+        user = %user,
+        client_ip = %client_ip_addr,
+        session_type = ?create_req.session_type,
+        target = %target,
+        "Ad-hoc connect requested"
+    );
+
+    match manager.create_session(create_req, user.clone()).await {
+        Ok(info) => {
+            tracing::info!(user = %user, session_id = %info.session_id, "Ad-hoc session created");
+            (StatusCode::CREATED, Json(json!(info))).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            tracing::error!(user = %user, target = %target, error = %msg, "Ad-hoc session creation failed");
+            let status = match &e {
+                crate::session::SessionError::ValidationError(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            (status, Json(json!({ "error": msg }))).into_response()
         }
     }
 }
@@ -7002,99 +7267,20 @@ pub async fn quick_connect(
             );
         }
 
-        let session_type = match ab_entry.session_type.as_str() {
-            "ssh" => SessionType::Ssh,
-            "rdp" => SessionType::Rdp,
-            "vnc" => SessionType::Vnc,
-            "web" => SessionType::Web,
-            other => {
-                return quick_connect_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("Unknown session type: {}", other),
-                );
-            }
-        };
+        // Links open the four protocols a browser tab can carry on its own.
+        if !matches!(
+            ab_entry.session_type.as_str(),
+            "ssh" | "rdp" | "vnc" | "web"
+        ) {
+            return quick_connect_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Unknown session type: {}", ab_entry.session_type),
+            );
+        }
 
-        let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
-        let create_req = CreateSessionRequest {
-            session_type,
-            hostname: ab_entry.hostname,
-            port: ab_entry.port,
-            username: ab_entry.username,
-            password: ab_entry.password,
-            private_key: ab_entry.private_key,
-            generate_keypair: None,
-            url: ab_entry.url,
-            domain: ab_entry.domain,
-            security: ab_entry.security,
-            server_layout: ab_entry.server_layout,
-            ignore_cert: ab_entry.ignore_cert,
-            auth_pkg: ab_entry.auth_pkg,
-            kdc_url: ab_entry.kdc_url,
-            kerberos_cache: None,
-            color_depth: ab_entry.color_depth,
-            jump_hosts: ab_entry.jump_hosts,
-            jump_host: None,
-            jump_port: None,
-            jump_username: None,
-            jump_password: None,
-            jump_private_key: None,
-            width: query.width,
-            height: query.height,
-            dpi: query.dpi,
-            banner: ab_entry.banner,
-            enable_drive: ab_entry.enable_drive,
-            remote_app: ab_entry.remote_app,
-            remote_app_dir: ab_entry.remote_app_dir,
-            remote_app_args: ab_entry.remote_app_args,
-            enable_recording: ab_entry.enable_recording,
-            record_typescript: ab_entry.record_typescript,
-            address_book_entry: Some(ab_entry_key),
-            address_book_folder: Some(folder.to_string()),
-            entry_display_name: ab_entry.display_name.clone(),
-            max_recordings: ab_entry.max_recordings,
-            login_script: ab_entry.login_script,
-            autofill: ab_entry.autofill,
-            allowed_domains: ab_entry.allowed_domains,
-            disable_copy: ab_entry.disable_copy,
-            disable_paste: ab_entry.disable_paste,
-            enable_gfx: ab_entry.enable_gfx,
-            enable_desktop_composition: ab_entry.enable_desktop_composition,
-            enable_wallpaper: ab_entry.enable_wallpaper,
-            enable_theming: ab_entry.enable_theming,
-            enable_full_window_drag: ab_entry.enable_full_window_drag,
-            force_lossless: ab_entry.force_lossless,
-            enable_h264: ab_entry.enable_h264,
-            container_image: ab_entry.container_image,
-            container_cpu_limit: ab_entry.container_cpu_limit,
-            container_memory_limit: ab_entry.container_memory_limit,
-            container_env: ab_entry.container_env,
-            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-            container_username: ab_entry.container_username,
-            container_password: ab_entry.container_password,
-            allow_sharing: ab_entry.allow_sharing,
-            fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-            autohide_side_tabs: ab_entry.autohide_side_tabs,
-            spice_tls: ab_entry.spice_tls,
-            spice_tls_port: ab_entry.spice_tls_port,
-            spice_ca_cert: ab_entry.spice_ca_cert,
-            spice_cert_subject: ab_entry.spice_cert_subject,
-            spice_proxy: ab_entry.spice_proxy,
-            proxmox_url: None,
-            proxmox_node: None,
-            proxmox_vmid: None,
-            proxmox_token_id: None,
-            proxmox_token_secret: None,
-            proxmox_verify_tls: None,
-            max_monitors: None,
-            owner: None,
-            fence_all_targets: false,
-            ssh_font_size: ab_entry.ssh_font_size,
-            wol_send_packet: ab_entry.wol_send_packet,
-            wol_mac_addr: ab_entry.wol_mac_addr,
-            wol_broadcast_addr: ab_entry.wol_broadcast_addr,
-            wol_udp_port: ab_entry.wol_udp_port,
-            wol_wait_time: ab_entry.wol_wait_time,
+        let create_req = match quick_connect_entry_request(ab_entry, &query, scope, folder, entry) {
+            Ok(r) => r,
+            Err(msg) => return quick_connect_error(StatusCode::BAD_REQUEST, &msg),
         };
 
         tracing::info!(
@@ -7115,7 +7301,7 @@ pub async fn quick_connect(
     }
 
     // Ad-hoc mode: requires poweruser+
-    if !id.has_role("poweruser") {
+    if !can_connect_adhoc(&id) {
         return quick_connect_error(
             StatusCode::FORBIDDEN,
             "Poweruser role or higher required for ad-hoc connections.",
@@ -7229,6 +7415,27 @@ pub async fn quick_connect(
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
         Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
+}
+
+/// The session request for an entry opened from a `/api/connect` link, at
+/// the size the link asks for.
+fn quick_connect_entry_request(
+    ab_entry: AddressBookEntry,
+    query: &QuickConnectQuery,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+) -> Result<CreateSessionRequest, String> {
+    let display = EntryDisplay {
+        width: query.width,
+        height: query.height,
+        dpi: query.dpi,
+    };
+    let attribution = EntryRef {
+        key: format!("{}/{}/{}", scope, folder, entry),
+        folder: folder.to_string(),
+    };
+    session_request_from_entry(ab_entry, display, Some(attribution))
 }
 
 /// Return an inline HTML credential form for quick-connect when prompting is needed.
@@ -7374,6 +7581,646 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::SessionInfo;
+
+    // ── The entry-to-request conversion, against the code it replaced ──
+
+    /// `ab_connect_entry`'s inline conversion before it moved into
+    /// `session_request_from_entry`, verbatim.
+    #[allow(clippy::let_and_return)] // kept verbatim
+    fn legacy_ab_connect_request(
+        ab_entry: AddressBookEntry,
+        session_type: SessionType,
+        req: ConnectRequest,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> CreateSessionRequest {
+        let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+        let (initial_width, initial_height) = initial_session_size(
+            &ab_entry.session_type,
+            ab_entry.fullscreen_on_connect.unwrap_or(false),
+            (req.width, req.height),
+            (req.screen_width, req.screen_height),
+        );
+        let create_req = CreateSessionRequest {
+            session_type,
+            hostname: ab_entry.hostname,
+            port: ab_entry.port,
+            username: req.username.or(ab_entry.username),
+            password: req.password.or(ab_entry.password),
+            private_key: ab_entry.private_key,
+            generate_keypair: None,
+            url: ab_entry.url,
+            domain: req.domain.or(ab_entry.domain),
+            security: ab_entry.security,
+            server_layout: ab_entry.server_layout,
+            ignore_cert: ab_entry.ignore_cert,
+            auth_pkg: ab_entry.auth_pkg,
+            kdc_url: ab_entry.kdc_url,
+            kerberos_cache: None,
+            color_depth: ab_entry.color_depth,
+            jump_hosts: ab_entry.jump_hosts,
+            jump_host: None,
+            jump_port: None,
+            jump_username: None,
+            jump_password: None,
+            jump_private_key: None,
+            width: initial_width,
+            height: initial_height,
+            dpi: req.dpi,
+            banner: req.banner.or(ab_entry.banner),
+            enable_drive: ab_entry.enable_drive,
+            remote_app: ab_entry.remote_app,
+            remote_app_dir: ab_entry.remote_app_dir,
+            remote_app_args: ab_entry.remote_app_args,
+            enable_recording: ab_entry.enable_recording,
+            record_typescript: ab_entry.record_typescript,
+            address_book_entry: Some(ab_entry_key.clone()),
+            address_book_folder: Some(folder.to_string()),
+            entry_display_name: ab_entry.display_name.clone(),
+            max_recordings: ab_entry.max_recordings,
+            login_script: ab_entry.login_script,
+            autofill: ab_entry.autofill,
+            allowed_domains: ab_entry.allowed_domains,
+            disable_copy: ab_entry.disable_copy,
+            disable_paste: ab_entry.disable_paste,
+            enable_gfx: ab_entry.enable_gfx,
+            enable_desktop_composition: ab_entry.enable_desktop_composition,
+            enable_wallpaper: ab_entry.enable_wallpaper,
+            enable_theming: ab_entry.enable_theming,
+            enable_full_window_drag: ab_entry.enable_full_window_drag,
+            force_lossless: ab_entry.force_lossless,
+            enable_h264: ab_entry.enable_h264,
+            container_image: ab_entry.container_image,
+            container_cpu_limit: ab_entry.container_cpu_limit,
+            container_memory_limit: ab_entry.container_memory_limit,
+            container_env: ab_entry.container_env,
+            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
+            container_username: ab_entry.container_username,
+            container_password: ab_entry.container_password,
+            allow_sharing: ab_entry.allow_sharing,
+            fullscreen_on_connect: ab_entry.fullscreen_on_connect,
+            autohide_side_tabs: ab_entry.autohide_side_tabs,
+            spice_tls: ab_entry.spice_tls,
+            spice_tls_port: ab_entry.spice_tls_port,
+            spice_ca_cert: ab_entry.spice_ca_cert,
+            spice_cert_subject: ab_entry.spice_cert_subject,
+            spice_proxy: ab_entry.spice_proxy,
+            proxmox_url: ab_entry.proxmox_url,
+            proxmox_node: ab_entry.proxmox_node,
+            proxmox_vmid: ab_entry.proxmox_vmid,
+            proxmox_token_id: ab_entry.proxmox_token_id,
+            proxmox_token_secret: ab_entry.proxmox_token_secret,
+            proxmox_verify_tls: ab_entry.proxmox_verify_tls,
+            max_monitors: ab_entry.max_monitors,
+            owner: None,
+            fence_all_targets: false,
+            ssh_font_size: ab_entry.ssh_font_size,
+            wol_send_packet: ab_entry.wol_send_packet,
+            wol_mac_addr: ab_entry.wol_mac_addr,
+            wol_broadcast_addr: ab_entry.wol_broadcast_addr,
+            wol_udp_port: ab_entry.wol_udp_port,
+            wol_wait_time: ab_entry.wol_wait_time,
+        };
+        create_req
+    }
+
+    /// `quick_connect`'s inline conversion (entry mode), verbatim.
+    #[allow(clippy::let_and_return)] // kept verbatim
+    fn legacy_quick_connect_request(
+        ab_entry: AddressBookEntry,
+        session_type: SessionType,
+        query: QuickConnectQuery,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> CreateSessionRequest {
+        let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+        let create_req = CreateSessionRequest {
+            session_type,
+            hostname: ab_entry.hostname,
+            port: ab_entry.port,
+            username: ab_entry.username,
+            password: ab_entry.password,
+            private_key: ab_entry.private_key,
+            generate_keypair: None,
+            url: ab_entry.url,
+            domain: ab_entry.domain,
+            security: ab_entry.security,
+            server_layout: ab_entry.server_layout,
+            ignore_cert: ab_entry.ignore_cert,
+            auth_pkg: ab_entry.auth_pkg,
+            kdc_url: ab_entry.kdc_url,
+            kerberos_cache: None,
+            color_depth: ab_entry.color_depth,
+            jump_hosts: ab_entry.jump_hosts,
+            jump_host: None,
+            jump_port: None,
+            jump_username: None,
+            jump_password: None,
+            jump_private_key: None,
+            width: query.width,
+            height: query.height,
+            dpi: query.dpi,
+            banner: ab_entry.banner,
+            enable_drive: ab_entry.enable_drive,
+            remote_app: ab_entry.remote_app,
+            remote_app_dir: ab_entry.remote_app_dir,
+            remote_app_args: ab_entry.remote_app_args,
+            enable_recording: ab_entry.enable_recording,
+            record_typescript: ab_entry.record_typescript,
+            address_book_entry: Some(ab_entry_key),
+            address_book_folder: Some(folder.to_string()),
+            entry_display_name: ab_entry.display_name.clone(),
+            max_recordings: ab_entry.max_recordings,
+            login_script: ab_entry.login_script,
+            autofill: ab_entry.autofill,
+            allowed_domains: ab_entry.allowed_domains,
+            disable_copy: ab_entry.disable_copy,
+            disable_paste: ab_entry.disable_paste,
+            enable_gfx: ab_entry.enable_gfx,
+            enable_desktop_composition: ab_entry.enable_desktop_composition,
+            enable_wallpaper: ab_entry.enable_wallpaper,
+            enable_theming: ab_entry.enable_theming,
+            enable_full_window_drag: ab_entry.enable_full_window_drag,
+            force_lossless: ab_entry.force_lossless,
+            enable_h264: ab_entry.enable_h264,
+            container_image: ab_entry.container_image,
+            container_cpu_limit: ab_entry.container_cpu_limit,
+            container_memory_limit: ab_entry.container_memory_limit,
+            container_env: ab_entry.container_env,
+            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
+            container_username: ab_entry.container_username,
+            container_password: ab_entry.container_password,
+            allow_sharing: ab_entry.allow_sharing,
+            fullscreen_on_connect: ab_entry.fullscreen_on_connect,
+            autohide_side_tabs: ab_entry.autohide_side_tabs,
+            spice_tls: ab_entry.spice_tls,
+            spice_tls_port: ab_entry.spice_tls_port,
+            spice_ca_cert: ab_entry.spice_ca_cert,
+            spice_cert_subject: ab_entry.spice_cert_subject,
+            spice_proxy: ab_entry.spice_proxy,
+            proxmox_url: None,
+            proxmox_node: None,
+            proxmox_vmid: None,
+            proxmox_token_id: None,
+            proxmox_token_secret: None,
+            proxmox_verify_tls: None,
+            max_monitors: None,
+            owner: None,
+            fence_all_targets: false,
+            ssh_font_size: ab_entry.ssh_font_size,
+            wol_send_packet: ab_entry.wol_send_packet,
+            wol_mac_addr: ab_entry.wol_mac_addr,
+            wol_broadcast_addr: ab_entry.wol_broadcast_addr,
+            wol_udp_port: ab_entry.wol_udp_port,
+            wol_wait_time: ab_entry.wol_wait_time,
+        };
+        create_req
+    }
+
+    /// An entry with every field the conversion reads set to something
+    /// distinct, so a field dropped or swapped shows up.
+    fn full_entry(session_type: &str) -> AddressBookEntry {
+        // In parts: one json! literal this size exceeds the macro recursion limit.
+        let mut body = serde_json::Map::new();
+        for part in [
+            json!({
+            "type": session_type,
+            "hostname": "host.example.test", "port": 2222,
+            "username": "alice", "password": "pw", "private_key": "KEY",
+            "url": "https://app.example.test", "domain": "CORP",
+            "security": "nla", "server_layout": "en-gb-qwerty", "ignore_cert": true,
+            "display_name": "Host One", "enable_drive": true, "auth_pkg": "kerberos",
+            "kdc_url": "https://kdc.example.test", "prompt_credentials": false,
+            "color_depth": 16
+            }),
+            json!({
+            "jump_hosts": [{"hostname": "bastion", "port": 22, "username": "j",
+                            "password": "jp", "private_key": null, "host_key": null}],
+            "remote_app": "||notepad", "remote_app_dir": "C:\\", "remote_app_args": "-x",
+            "enable_recording": false, "max_recordings": 3, "record_typescript": true,
+            "login_script": "login.sh", "autofill": "[]",
+            "allowed_domains": ["example.test"], "disable_copy": true, "disable_paste": true,
+            "banner": "be careful", "enable_gfx": true, "enable_desktop_composition": true,
+            "enable_wallpaper": true, "enable_theming": true, "enable_full_window_drag": true
+            }),
+            json!({
+            "force_lossless": true, "enable_h264": false,
+            "container_image": "desktop:1", "container_cpu_limit": 3.0,
+            "container_memory_limit": 2048, "container_env": {"A": "1"},
+            "container_idle_timeout_mins": 5, "container_username": "svc",
+            "container_password": "svcpw", "allow_sharing": true,
+            "auto_open_if_singleton": true, "fullscreen_on_connect": true,
+            "autohide_side_tabs": true, "spice_tls": true, "spice_tls_port": 5901,
+            "spice_ca_cert": "CA", "spice_cert_subject": "CN=x"
+            }),
+            json!({
+            "spice_proxy": "http://proxy:3128", "proxmox_url": "https://pve:8006",
+            "proxmox_node": "pve1", "proxmox_vmid": 101, "proxmox_token_id": "u@pam!t",
+            "proxmox_token_secret": "secret", "proxmox_verify_tls": true,
+            "max_monitors": 2, "ssh_font_size": 14, "wol_send_packet": true,
+            "wol_mac_addr": "00:11:22:33:44:55", "wol_broadcast_addr": "192.0.2.255",
+            "wol_udp_port": 9, "wol_wait_time": 30, "external_id": "netbox:device:1"
+            }),
+        ] {
+            body.extend(part.as_object().unwrap().clone());
+        }
+        serde_json::from_value(serde_json::Value::Object(body)).unwrap()
+    }
+
+    fn as_json(req: &CreateSessionRequest) -> serde_json::Value {
+        let mut v = serde_json::to_value(req).unwrap();
+        v["fence_all_targets"] = json!(req.fence_all_targets);
+        v
+    }
+
+    #[test]
+    fn entry_connect_request_matches_the_inline_conversion() {
+        for session_type in ["ssh", "rdp", "vnc", "spice", "proxmox", "web", "vdi"] {
+            for prompt in [
+                json!({ "width": 1700, "height": 900, "screen_width": 1920,
+                        "screen_height": 1080, "dpi": 144 }),
+                json!({ "width": 800, "height": 600, "username": "bob",
+                        "password": "typed", "domain": "OTHER", "banner": "hi" }),
+            ] {
+                let req = || serde_json::from_value::<ConnectRequest>(prompt.clone()).unwrap();
+                let new = entry_connect_request(
+                    full_entry(session_type),
+                    req(),
+                    "shared/ops/host-1",
+                    "ops",
+                )
+                .unwrap();
+                let old = legacy_ab_connect_request(
+                    full_entry(session_type),
+                    entry_session_type(session_type).unwrap(),
+                    req(),
+                    "shared",
+                    "ops",
+                    "host-1",
+                );
+                assert_eq!(as_json(&new), as_json(&old), "{session_type} {prompt}");
+                assert_eq!(new.reuse_fingerprint(), old.reuse_fingerprint());
+            }
+        }
+    }
+
+    #[test]
+    fn quick_connect_request_matches_the_inline_conversion() {
+        let query = || -> QuickConnectQuery {
+            serde_urlencoded::from_str("width=1280&height=720&dpi=96").unwrap()
+        };
+        for session_type in ["ssh", "rdp", "vnc", "web"] {
+            let new = quick_connect_entry_request(
+                full_entry(session_type),
+                &query(),
+                "shared",
+                "ops",
+                "host-1",
+            )
+            .unwrap();
+            let old = legacy_quick_connect_request(
+                full_entry(session_type),
+                entry_session_type(session_type).unwrap(),
+                query(),
+                "shared",
+                "ops",
+                "host-1",
+            );
+            let (mut new, mut old) = (as_json(&new), as_json(&old));
+            // The one difference: links dropped the entry's Proxmox fields
+            // and monitor count. Proxmox fields mean nothing to these four
+            // types; the monitor count now reaches an RDP session from a
+            // link as it does from the page.
+            assert_eq!(new["max_monitors"], json!(2));
+            for k in [
+                "proxmox_url",
+                "proxmox_node",
+                "proxmox_vmid",
+                "proxmox_token_id",
+                "proxmox_token_secret",
+                "proxmox_verify_tls",
+                "max_monitors",
+            ] {
+                assert_eq!(old[k], serde_json::Value::Null, "{k}");
+                new.as_object_mut().unwrap().remove(k);
+                old.as_object_mut().unwrap().remove(k);
+            }
+            assert_eq!(new, old, "{session_type}");
+        }
+    }
+
+    #[test]
+    fn an_adhoc_request_names_no_entry() {
+        let display = EntryDisplay {
+            width: Some(1024),
+            height: Some(768),
+            dpi: Some(96),
+        };
+        let req = session_request_from_entry(full_entry("ssh"), display, None).unwrap();
+        assert_eq!(req.address_book_entry, None);
+        assert_eq!(req.address_book_folder, None);
+        assert_eq!(req.entry_display_name, None);
+        assert_eq!(req.hostname.as_deref(), Some("host.example.test"));
+        assert!(session_request_from_entry(
+            AddressBookEntry {
+                session_type: "telnet".into(),
+                ..Default::default()
+            },
+            EntryDisplay {
+                width: None,
+                height: None,
+                dpi: None
+            },
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn saved_entries_keep_their_admin_settings() {
+        // A saved entry's fixed VDI account, recording opt-out, drive and
+        // resources reach the session; only ad-hoc requests are filtered.
+        let req = entry_connect_request(
+            full_entry("vdi"),
+            serde_json::from_value(json!({})).unwrap(),
+            "shared/ops/host-1",
+            "ops",
+        )
+        .unwrap();
+        assert!(!req.fence_all_targets);
+        assert_eq!(req.container_username.as_deref(), Some("svc"));
+        assert_eq!(req.enable_recording, Some(false));
+        assert_eq!(req.enable_drive, Some(true));
+        assert_eq!(req.container_cpu_limit, Some(3.0));
+        assert_eq!(req.max_recordings, Some(3));
+    }
+
+    // ── Ad-hoc connections ──
+
+    /// Credentials and folder defaults behind one fake, counting what is
+    /// read. Folder defaults are set for every type, so an ad-hoc entry
+    /// would pick them up if anything lent them.
+    struct FakeVault {
+        creds: std::collections::HashMap<String, String>,
+        cred_reads: std::sync::Mutex<Vec<String>>,
+        defaults_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeVault {
+        fn with(creds: &[(&str, &str)]) -> Self {
+            Self {
+                creds: creds
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                cred_reads: Default::default(),
+                defaults_reads: Default::default(),
+            }
+        }
+    }
+
+    impl UserCredentialSource for FakeVault {
+        async fn user_credentials(
+            &self,
+            email: &str,
+        ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+            self.cred_reads.lock().unwrap().push(email.to_string());
+            Ok(self.creds.clone())
+        }
+    }
+
+    impl DefaultsSource for FakeVault {
+        async fn folder_defaults(
+            &self,
+            _scope: &str,
+            _folder: &str,
+        ) -> Result<Option<crate::vault::FolderDefaults>, VaultError> {
+            self.defaults_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(
+                serde_json::from_value(json!({
+                    "ssh": { "username": "folder-user", "password": "folder-pw" }
+                }))
+                .unwrap(),
+            ))
+        }
+        async fn takes_parent_defaults(&self, _s: &str, _f: &str) -> Result<bool, VaultError> {
+            self.defaults_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    fn user(email: &str, role: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: email.into(),
+            role: role.into(),
+            groups: vec![],
+        }
+    }
+
+    fn adhoc_entry(body: serde_json::Value) -> AddressBookEntry {
+        serde_json::from_value(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn adhoc_resolves_only_the_callers_own_variables() {
+        let vault = FakeVault::with(&[("my_ssh_key", "-----KEY-----"), ("me", "alice")]);
+        let entry = adhoc_entry(json!({
+            "type": "ssh", "hostname": "10.0.0.1",
+            "username": "$me", "private_key": "$my_ssh_key",
+        }));
+        let caller = user("Alice@example.com", "poweruser");
+        let out = resolve_adhoc_entry(entry, &caller, Some(&vault))
+            .await
+            .unwrap();
+        assert_eq!(out.username.as_deref(), Some("alice"));
+        assert_eq!(out.private_key.as_deref(), Some("-----KEY-----"));
+        assert_eq!(*vault.cred_reads.lock().unwrap(), vec!["Alice@example.com"]);
+    }
+
+    #[tokio::test]
+    async fn adhoc_missing_variables_are_named() {
+        let vault = FakeVault::with(&[("me", "alice")]);
+        let entry = adhoc_entry(json!({
+            "type": "ssh", "hostname": "10.0.0.1", "username": "$me", "password": "$nope",
+        }));
+        let err = resolve_adhoc_entry(entry, &user("a@example.com", "poweruser"), Some(&vault))
+            .await
+            .unwrap_err();
+        assert_eq!(err, AdhocEntryError::MissingVariables(vec!["nope".into()]));
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::PRECONDITION_FAILED
+        );
+    }
+
+    #[tokio::test]
+    async fn adhoc_variables_need_a_signed_in_user() {
+        let vault = FakeVault::with(&[("me", "alice")]);
+        let entry = adhoc_entry(json!({ "type": "ssh", "hostname": "h", "username": "$me" }));
+        let err = resolve_adhoc_entry(entry, &AuthIdentity::ApiKey("ci".into()), Some(&vault))
+            .await
+            .unwrap_err();
+        assert_eq!(err, AdhocEntryError::ApiKeyVariables);
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+        assert!(vault.cred_reads.lock().unwrap().is_empty());
+        // Without variables an API key connects as before.
+        let plain = adhoc_entry(json!({ "type": "ssh", "hostname": "h", "username": "root" }));
+        let ci = AuthIdentity::ApiKey("ci".into());
+        assert!(resolve_adhoc_entry(plain, &ci, Some(&vault)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn adhoc_without_vault_leaves_references_alone() {
+        let entry = adhoc_entry(json!({ "type": "ssh", "hostname": "h", "username": "$me" }));
+        let out =
+            resolve_adhoc_entry::<FakeVault>(entry, &user("a@example.com", "poweruser"), None)
+                .await
+                .unwrap();
+        assert_eq!(out.username.as_deref(), Some("$me"));
+    }
+
+    #[tokio::test]
+    async fn adhoc_never_takes_folder_defaults() {
+        // A bare SSH entry is exactly what folder defaults fill in on a saved
+        // entry; an ad-hoc one has no folder, so it stays bare.
+        let vault = FakeVault::with(&[]);
+        let caller = user("a@example.com", "poweruser");
+        let out = resolve_adhoc_entry(
+            adhoc_entry(json!({ "type": "ssh", "hostname": "10.0.0.1" })),
+            &caller,
+            Some(&vault),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.username, None);
+        assert_eq!(out.password, None);
+        assert_eq!(
+            vault
+                .defaults_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no folder defaults may be read for an ad-hoc connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn adhoc_legacy_jump_host_fields_become_a_chain() {
+        let entry = adhoc_entry(json!({
+            "type": "ssh", "hostname": "h", "jump_host": "bastion", "jump_username": "j",
+        }));
+        let out =
+            resolve_adhoc_entry::<FakeVault>(entry, &user("a@example.com", "poweruser"), None)
+                .await
+                .unwrap();
+        let hops = out.jump_hosts.unwrap();
+        assert_eq!((hops[0].hostname.as_str(), hops[0].port), ("bastion", 22));
+        assert_eq!(out.jump_host, None);
+    }
+
+    fn adhoc_test_manager() -> SessionManager {
+        let config = crate::config::Config {
+            recording_path: std::env::temp_dir()
+                .join(format!("rustguac-adhoc-test-{}", Uuid::new_v4())),
+            xvnc_path: "/bin/true".into(),
+            chromium_path: "/bin/true".into(),
+            login_scripts_dir: "/tmp".into(),
+            ..Default::default()
+        };
+        SessionManager::new(config, None)
+    }
+
+    fn adhoc_body(extra: serde_json::Value) -> AdhocConnectRequest {
+        let mut body = json!({ "width": 1280, "height": 720 });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    /// What a poweruser's ad-hoc connection would make of `entry`, through
+    /// to `create_session` on a manager with the default (localhost-only)
+    /// allowlists.
+    async fn poweruser_adhoc(entry: serde_json::Value) -> Result<SessionInfo, String> {
+        let mgr = adhoc_test_manager();
+        let mut body = adhoc_body(json!({ "entry": entry }));
+        let entry = std::mem::take(&mut body.entry);
+        let req = adhoc_session_request(entry, &body, false, mgr.config())?;
+        assert!(req.fence_all_targets);
+        mgr.create_session(req, "pu@example.com".into())
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    #[tokio::test]
+    async fn adhoc_fences_spice_proxmox_and_jump_hosts() {
+        let spice = poweruser_adhoc(json!({ "type": "spice", "hostname": "192.0.2.30" })).await;
+        assert!(
+            spice
+                .as_ref()
+                .unwrap_err()
+                .contains("not in the allowed network list"),
+            "{:?}",
+            spice.err()
+        );
+        let pve = poweruser_adhoc(json!({
+            "type": "proxmox", "proxmox_url": "https://192.0.2.20:8006", "proxmox_vmid": 100,
+        }))
+        .await;
+        assert!(
+            pve.as_ref().unwrap_err().contains("Proxmox API"),
+            "{:?}",
+            pve.err()
+        );
+        let jump = poweruser_adhoc(json!({
+            "type": "ssh", "hostname": "127.0.0.1",
+            "jump_hosts": [{ "hostname": "192.0.2.10", "port": 22, "username": "j" }],
+        }))
+        .await;
+        assert!(
+            jump.as_ref().unwrap_err().contains("jump host"),
+            "{:?}",
+            jump.err()
+        );
+    }
+
+    #[test]
+    fn adhoc_drops_wake_on_lan_and_entry_only_settings() {
+        let mgr = adhoc_test_manager();
+        let body = adhoc_body(json!({ "entry": { "type": "vdi" } }));
+        let req = adhoc_session_request(full_entry("ssh"), &body, false, mgr.config()).unwrap();
+        assert!(req.fence_all_targets);
+        assert_eq!(req.wol_send_packet, None);
+        assert_eq!(req.wol_mac_addr, None);
+        assert_eq!(req.container_username, None);
+        assert_eq!(req.max_recordings, None);
+        assert_eq!(req.record_typescript, None);
+        assert_eq!(req.allow_sharing, None);
+        // Recording is on site-wide by default: the entry's opt-out is ignored.
+        assert_eq!(req.enable_recording, None);
+        // No [drive] section: the drive stays off.
+        assert_eq!(req.enable_drive, None);
+        // What an ad-hoc caller may choose is kept.
+        assert_eq!(req.login_script.as_deref(), Some("login.sh"));
+        assert_eq!(req.ssh_font_size, Some(14));
+        assert_eq!(req.disable_copy, Some(true));
+    }
+
+    #[test]
+    fn adhoc_from_an_admin_is_used_as_sent() {
+        let mgr = adhoc_test_manager();
+        let body = adhoc_body(json!({ "entry": { "type": "ssh" }, "generate_keypair": true }));
+        let req = adhoc_session_request(full_entry("ssh"), &body, true, mgr.config()).unwrap();
+        assert!(!req.fence_all_targets);
+        assert_eq!(req.wol_send_packet, Some(true));
+        assert_eq!(req.enable_recording, Some(false));
+        assert_eq!(req.generate_keypair, Some(true));
+        assert_eq!(req.address_book_entry, None);
+    }
 
     #[test]
     fn folder_update_leaves_an_omitted_display_name_alone() {

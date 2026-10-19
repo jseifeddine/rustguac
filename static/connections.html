@@ -635,6 +635,14 @@
         .folder-row-main { gap: 2px; }
         .folder-desc { font-size: 12px; }
         .tree-children { margin-left: var(--s-3) !important; }
+        /* Ad-hoc mode of the entry editor (Connect to a host): no name or
+           folder, Connect instead of Save, and for non-admins none of the
+           options only a saved entry may set. */
+        #entry-modal:not(.adhoc) .adhoc-only,
+        #entry-modal.adhoc .adhoc-hide,
+        #entry-modal.adhoc.adhoc-restricted .entry-only,
+        #entry-modal:not(.adhoc-restricted) .adhoc-restricted-only { display: none !important; }
+        .var-pick { margin-top: 0.3em; font-size: 0.85em; width: auto; max-width: 100%; }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
@@ -805,6 +813,9 @@
     <div class="modal-overlay" id="entry-modal">
         <div class="modal">
             <h3 id="entry-modal-title">New Entry</h3>
+            <p class="modal-hint adhoc-only" id="em-adhoc-hint">A one-off connection to any host. Nothing is saved. Credential fields accept your own <a href="/docs.html#credential-variables">credential variables</a>, such as <code>$my_ssh_key</code>.</p>
+            <datalist id="em-cred-vars"></datalist>
+            <div class="adhoc-hide">
             <label>Name
                 <input type="text" id="em-name" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64">
             </label>
@@ -812,6 +823,7 @@
             <label>Display name
                 <input type="text" id="em-display-name" placeholder="e.g. Web Server 01">
             </label>
+            </div>
             <label>Type
                 <select id="em-type">
                     <option value="ssh">SSH</option>
@@ -839,14 +851,22 @@
                 <label>Private key (PEM)
                     <textarea id="em-private-key" rows="3" style="resize:vertical;font-size:0.85em" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
                 </label>
+                <div class="adhoc-only">
+                    <label style="margin-top:0.5em">
+                        <input type="checkbox" id="em-ssh-generate-keypair" style="display:inline;width:auto;margin-right:0.4em"> Generate ephemeral SSH keypair
+                    </label>
+                    <div class="field-hint">A fresh Ed25519 key for this session only. Its public key is shown before connecting, to add to the host's <code>authorized_keys</code>.</div>
+                </div>
                 <label>Terminal font size <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                     <input type="number" id="em-ssh-font-size" min="6" max="72" placeholder="12">
                 </label>
                 <div class="field-hint">Points. Leave blank for the default (12). Increase or decrease to tune readability — the terminal size no longer scales with display DPI.</div>
+                <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-ssh-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
                 <div class="field-hint">When enabled, users will be asked for username/password even if credentials are stored.</div>
+                </div>
             </div>
             <div id="em-rdp-fields" style="display:none">
                 <label>Hostname
@@ -911,10 +931,12 @@
                 <label>Monitors <span style="color:var(--text-muted);font-size:0.85em">(RDP Display Control; the host must allow multiple monitors)</span>
                     <input type="number" id="em-rdp-monitors" min="1" max="4" value="1">
                 </label>
+                <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-rdp-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
                 <div class="field-hint">When enabled, users will be asked for username/password even if credentials are stored.</div>
+                </div>
             </div>
             <div id="em-vnc-fields" style="display:none">
                 <label>Hostname
@@ -938,10 +960,12 @@
                         <option value="32">32-bit</option>
                     </select>
                 </label>
+                <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-vnc-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
                 <div class="field-hint">When enabled, users will be asked for credentials even if they are stored.</div>
+                </div>
             </div>
             <div id="em-spice-fields" style="display:none">
                 <label>Hostname
@@ -980,7 +1004,7 @@
                 <label>Proxy <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                     <input type="text" id="em-spice-proxy" placeholder="http://proxy.example.com:3128">
                 </label>
-                <label style="margin-top:0.8em">
+                <label style="margin-top:0.8em" class="entry-only">
                     <input type="checkbox" id="em-spice-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
                 <div class="field-hint">Direct SPICE displays (e.g. libvirt/QEMU consoles). The TLS, CA, certificate-subject and proxy fields support connecting through a SPICE proxy. For Proxmox VE VMs, use the "Proxmox VE console" type instead (it brokers the one-time ticket automatically).</div>
@@ -1081,6 +1105,7 @@
                 <label>Environment Variables <span style="color:var(--text-muted);font-size:0.85em">(optional, KEY=VALUE per line)</span>
                     <textarea id="em-vdi-env" rows="3" style="resize:vertical;font-size:0.85em" placeholder="TZ=Australia/Brisbane&#10;LANG=en_US.UTF-8"></textarea>
                 </label>
+                <div class="entry-only">
                 <label>Container username <span style="color:var(--text-muted);font-size:0.85em">(optional, overrides auto-derive)</span>
                     <input type="text" id="em-vdi-container-username" placeholder="Leave blank to derive from operator identity">
                 </label>
@@ -1088,6 +1113,7 @@
                     <input type="password" id="em-vdi-container-password" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
                 </label>
                 <div class="field-hint">Use these only when the container image has a fixed account (Pattern B in the <a href="/docs.html#vdi" style="color:var(--accent)">VDI docs</a>). When set, rustguac uses these creds for the RDP login into the container, and the same container is shared by everyone connecting through this entry (deterministic name from the username). When left blank, rustguac derives a per-operator username and generates a fresh password every connect. Both fields support <a href="/docs.html#credential-variables" style="color:var(--accent)">credential variables</a> (e.g. <code>$corp_username</code>).</div>
+                </div>
                 <label>Idle Timeout <span style="color:var(--text-muted);font-size:0.85em">(optional, minutes)</span>
                     <input type="number" id="em-vdi-idle-timeout" min="0" placeholder="e.g. 60 (0 = use global default)">
                 </label>
@@ -1133,12 +1159,15 @@
                         <label>
                             <input type="checkbox" id="em-enable-recording" style="display:inline;width:auto;margin-right:0.4em" checked> Enable recording
                         </label>
+                        <div class="entry-only">
                         <label style="margin-top:0.5em">Max recordings to keep
                             <input type="number" id="em-max-recordings" value="0" min="0" style="width:100px">
                         </label>
                         <div class="field-hint">0 = unlimited. Oldest recordings are deleted when the limit is exceeded.</div>
+                        </div>
+                        <div class="field-hint adhoc-restricted-only">Recording that is on for the whole site stays on.</div>
                     </div>
-                    <div id="em-typescript-row" style="display:none;margin-top:0.6em;padding-top:0.5em;border-top:1px dashed var(--border)">
+                    <div id="em-typescript-row" class="entry-only" style="display:none;margin-top:0.6em;padding-top:0.5em;border-top:1px dashed var(--border)">
                         <label>
                             <input type="checkbox" id="em-record-typescript" style="display:inline;width:auto;margin-right:0.4em"> Enable typescript recording for this session
                         </label>
@@ -1204,7 +1233,7 @@
                     <button type="button" class="btn-add" id="em-add-hop" style="margin-top:8px">+ Add Jump Host</button>
                 </div>
             </div>
-            <div id="em-wol-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+            <div id="em-wol-section" class="entry-only" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label style="cursor:pointer;color:var(--accent);font-size:0.95em" id="em-wol-toggle">
                     <span id="em-wol-arrow">&#9654;</span> Wake-on-LAN
                 </label>
@@ -1230,6 +1259,7 @@
                 </div>
             </div>
             <div id="em-sharing-section" style="margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <div class="entry-only">
                 <label style="text-transform:none;letter-spacing:0;cursor:pointer">
                     <input type="checkbox" id="em-allow-sharing" style="display:inline;width:auto;margin-right:0.5em">
                     Allow session sharing
@@ -1246,6 +1276,7 @@
                     On first visit to Connections, if the user has exactly one visible entry and
                     this box is ticked, connect automatically (replaces the current tab — browsers
                     block new-tab popups without a click). Kiosk-style single-purpose accounts.
+                </div>
                 </div>
                 <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.8em">
                     <input type="checkbox" id="em-fullscreen-on-connect" style="display:inline;width:auto;margin-right:0.5em">
@@ -1267,16 +1298,28 @@
                     on-screen clutter over the remote display.
                 </div>
             </div>
-            <div id="em-move-section" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+            <div id="em-move-section" class="adhoc-hide" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
                 <label>Move to folder
                     <select id="em-move-target">
                         <option value="">(keep in current folder)</option>
                     </select>
                 </label>
             </div>
+            <div id="em-saveas-section" class="adhoc-only" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid var(--border)">
+                <div class="field-hint" style="margin-bottom:0.5em">Save this connection as an entry. Credential variables are saved as references, not values.</div>
+                <label>Folder
+                    <select id="em-saveas-folder"></select>
+                </label>
+                <label>Name
+                    <input type="text" id="em-saveas-name" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64">
+                </label>
+                <div class="field-hint">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</div>
+            </div>
             <div id="em-error" style="color:var(--primary);margin-top:0.5em"></div>
             <div class="modal-actions">
-                <button id="em-save">Save</button>
+                <button id="em-save" class="adhoc-hide">Save</button>
+                <button id="em-connect" class="adhoc-only">Connect</button>
+                <button id="em-saveas" class="btn-add adhoc-only" style="display:none">Save as entry</button>
                 <button class="btn-cancel" id="em-cancel">Cancel</button>
             </div>
         </div>
@@ -1806,6 +1849,11 @@
                 if (level >= 2) {
                     document.getElementById('tokens-link').style.display = '';
                 }
+                // Ad-hoc connections need no Vault, so this is settled before
+                // the no-Vault return below. Poweruser and up; an API key is
+                // always admin. The button itself is search.js's.
+                canAdhoc = level >= 3 || !!apiKey;
+                vaultReady = !!data.vault_enabled;
                 if (apiKey) {
                     // A key is never on the page GET, so the server served the anonymous variant.
                     document.documentElement.setAttribute('data-role-level', '4');
@@ -1825,12 +1873,13 @@
                         // Vault not configured at all
                         document.getElementById('no-vault').style.display = '';
                     }
+                    maybeOpenAdhocFromHash();
                     return;
                 }
                 // The first poll records the version this page is about to
                 // load; issued before the load so nothing in between is missed.
                 startLiveRefresh();
-                loadFolders(function() { rgHashOpen(); });
+                loadFolders(function() { rgHashOpen(); maybeOpenAdhocFromHash(); });
                 loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
@@ -2034,14 +2083,16 @@
             });
         }
 
-        function loadFolders() {
+        // `done` runs once the folder list (and any restored selection) is
+        // in place, for the URL hash actions that need it.
+        function loadFolders(done) {
             fetch('/api/addressbook', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 503) {
                     document.getElementById('vault-unavailable').style.display = '';
                     setTimeout(function() {
                         document.getElementById('vault-unavailable').style.display = 'none';
-                        loadFolders();
+                        loadFolders(done);
                     }, 15000);
                     return null;
                 }
@@ -2103,6 +2154,7 @@
                                     renderFolders();
                                     loadEntries(f.scope, folderPath(f));
                                     maybeAutoOpenSingleton();
+                                    if (done) done();
                                     return;
                                 }
                             }
@@ -2113,6 +2165,7 @@
                             loadEntries(folders[0].scope, folderPath(folders[0]));
                         }
                         maybeAutoOpenSingleton();
+                        if (done) done();
                     });
                     return;
                 }
@@ -4310,6 +4363,7 @@
 
         function openNewEntry() {
             if (!selectedFolder) return;
+            setAdhocMode(false);
             entryEditMode = null;
             cloneSource = null;
             document.getElementById('entry-modal-title').textContent = 'New Entry in ' + folderPath(selectedFolder);
@@ -4439,6 +4493,7 @@
         }
 
         function openEditEntry(name, scope, folder, type) {
+            setAdhocMode(false);
             entryEditMode = { scope: scope, folder: folder, name: name };
             cloneSource = null;
             document.getElementById('entry-modal-title').textContent = 'Edit: ' + name;
@@ -4678,17 +4733,12 @@
             entryTypeSelect.disabled = false;
         });
 
-        document.getElementById('em-save').addEventListener('click', function() {
-            var name = document.getElementById('em-name').value.trim();
+        // The entry the editor describes, in the form the entries API takes
+        // and the ad-hoc connect endpoint reads. Shared by Save, Connect and
+        // Save as entry, so every option works in all three.
+        function buildEntryFromForm() {
             var displayName = document.getElementById('em-display-name').value.trim();
             var type = entryTypeSelect.value;
-            var errEl = document.getElementById('em-error');
-
-            if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
-                errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
-                return;
-            }
-
             var entry = { type: type };
             if (displayName) entry.display_name = displayName;
 
@@ -4904,6 +4954,19 @@
                     });
                 }
             }
+            return entry;
+        }
+
+        document.getElementById('em-save').addEventListener('click', function() {
+            var name = document.getElementById('em-name').value.trim();
+            var errEl = document.getElementById('em-error');
+
+            if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
+                errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
+                return;
+            }
+
+            var entry = buildEntryFromForm();
 
             errEl.textContent = '';
             var scope = selectedFolder.scope;
@@ -5010,6 +5073,251 @@
                 .catch(function(err) { errEl.textContent = err.message; })
                 .finally(function() { saveBtn.disabled = false; saveBtn.textContent = 'Save'; });
             }
+        });
+
+        // ── Ad-hoc connections ("Connect to a host") ──
+        // The entry editor in ad-hoc mode: the same form, so every option an
+        // entry has works ad-hoc too, with Connect in place of Save and no
+        // name or folder. Poweruser and up. The server applies the ad-hoc
+        // policy (network fences, site recording and drive settings, VDI
+        // limits) whatever the form sends; for non-admins the options only a
+        // saved entry may set are hidden here as well.
+        var canAdhoc = false;   // set by init() from the caller's role
+        var vaultReady = false; // set by init(): Save as entry and variables need Vault
+        // Credential fields that offer the caller's own variables: text
+        // inputs get a datalist, the rest (passwords, keys) a picker.
+        var ADHOC_VAR_LIST_FIELDS = ['em-username', 'em-rdp-username', 'em-rdp-domain', 'em-vnc-username', 'em-web-username'];
+        var ADHOC_VAR_PICK_FIELDS = ['em-password', 'em-private-key', 'em-rdp-password', 'em-vnc-password', 'em-spice-password', 'em-web-password'];
+
+        function setAdhocMode(on) {
+            var modal = document.getElementById('entry-modal');
+            modal.classList.toggle('adhoc', !!on);
+            modal.classList.toggle('adhoc-restricted', !!on && !isAdmin);
+            ADHOC_VAR_LIST_FIELDS.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (on) el.setAttribute('list', 'em-cred-vars'); else el.removeAttribute('list');
+            });
+        }
+
+        function renderAdhocVars(names) {
+            var dl = document.getElementById('em-cred-vars');
+            dl.innerHTML = '';
+            names.forEach(function(n) {
+                var o = document.createElement('option');
+                o.value = '$' + n;
+                dl.appendChild(o);
+            });
+            ADHOC_VAR_PICK_FIELDS.forEach(function(id) {
+                var field = document.getElementById(id);
+                var host = field.closest('label') || field;
+                var pick = host.nextElementSibling;
+                if (!pick || !pick.classList.contains('var-pick')) {
+                    pick = document.createElement('select');
+                    pick.className = 'var-pick adhoc-only';
+                    pick.setAttribute('data-for', id);
+                    pick.setAttribute('aria-label', 'Use one of your credential variables');
+                    pick.addEventListener('change', function() {
+                        if (!pick.value) return;
+                        field.value = '$' + pick.value;
+                        field.dispatchEvent(new Event('input', { bubbles: true }));
+                        pick.value = '';
+                    });
+                    host.parentNode.insertBefore(pick, host.nextSibling);
+                }
+                pick.innerHTML = '<option value="">Use a credential variable&hellip;</option>';
+                names.forEach(function(n) {
+                    var o = document.createElement('option');
+                    o.value = n;
+                    o.textContent = '$' + n;
+                    pick.appendChild(o);
+                });
+                pick.style.display = names.length ? '' : 'none';
+            });
+        }
+
+        // Only the names: the values never reach the browser and are
+        // resolved by the server when connecting.
+        function loadAdhocVars() {
+            renderAdhocVars([]);
+            if (!vaultReady || apiKey) return;
+            fetch('/api/me/credentials', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    if (d && d.credentials) renderAdhocVars(Object.keys(d.credentials).sort());
+                })
+                .catch(function() {});
+        }
+
+        function syncAdhocKeypair() {
+            var gen = document.getElementById('em-ssh-generate-keypair').checked;
+            ['em-password', 'em-private-key'].forEach(function(id) {
+                var el = document.getElementById(id);
+                el.disabled = gen;
+                if (gen) el.value = '';
+            });
+        }
+        document.getElementById('em-ssh-generate-keypair').addEventListener('change', syncAdhocKeypair);
+
+        function adhocSaveAsTargets() {
+            var out = [];
+            (folders || []).forEach(function(f) { out.push(f); });
+            for (var ck in subfolderCache) {
+                subfolderCache[ck].forEach(function(f) { out.push(f); });
+            }
+            return out;
+        }
+
+        function openAdhocEntry() {
+            if (!canAdhoc) return;
+            entryEditMode = null;
+            cloneSource = null;
+            setAdhocMode(true);
+            document.getElementById('entry-modal-title').textContent = 'Connect to a host';
+            document.getElementById('em-name').value = '';
+            document.getElementById('em-display-name').value = '';
+            entryTypeSelect.value = 'ssh';
+            entryTypeSelect.disabled = false;
+            entryTypeSelect.dispatchEvent(new Event('change'));
+            clearEntryFields();
+            document.getElementById('em-ssh-generate-keypair').checked = false;
+            syncAdhocKeypair();
+            document.getElementById('em-error').textContent = '';
+
+            // Admins can keep what they filled in as a saved entry.
+            var targets = isAdmin && vaultReady ? adhocSaveAsTargets() : [];
+            var sel = document.getElementById('em-saveas-folder');
+            sel.innerHTML = '';
+            targets.forEach(function(f) {
+                var p = folderPath(f);
+                var opt = document.createElement('option');
+                opt.value = f.scope + '|' + p;
+                opt.textContent = p + ' (' + f.scope + ')';
+                if (selectedFolder && selectedFolder.scope === f.scope && folderPath(selectedFolder) === p) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            document.getElementById('em-saveas-name').value = '';
+            var canSave = targets.length > 0;
+            document.getElementById('em-saveas-section').style.display = canSave ? '' : 'none';
+            document.getElementById('em-saveas').style.display = canSave ? '' : 'none';
+
+            loadAdhocVars();
+            document.getElementById('entry-modal').classList.add('active');
+            try { document.getElementById('em-hostname').focus(); } catch (e) {}
+        }
+        // The global "Connect to a host" button (search.js) opens the editor
+        // in place here; every other page links to /connections.html#adhoc.
+        // A click before this page knows the caller's role waits for it.
+        var adhocRequested = false;
+        window.rgOpenAdhoc = function() {
+            if (canAdhoc) openAdhocEntry(); else adhocRequested = true;
+        };
+        function maybeOpenAdhocFromHash() {
+            var fromHash = location.hash === '#adhoc';
+            if (!(fromHash || adhocRequested) || !canAdhoc) return;
+            adhocRequested = false;
+            if (fromHash) {
+                try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+            }
+            openAdhocEntry();
+        }
+
+        function apiErrorText(t) {
+            try { var j = JSON.parse(t); if (j && j.error) return j.error; } catch (e) {}
+            return t;
+        }
+
+        function doAdhocConnect() {
+            var btn = document.getElementById('em-connect');
+            var errEl = document.getElementById('em-error');
+            var entry = buildEntryFromForm();
+            delete entry.display_name;
+            var body = { entry: entry };
+            if (entry.type === 'ssh' && document.getElementById('em-ssh-generate-keypair').checked) {
+                body.generate_keypair = true;
+                delete entry.password;
+                delete entry.private_key;
+            }
+            var bw = window.innerWidth, bh = window.innerHeight;
+            if (bw > 0 && bh > 0) { body.width = bw; body.height = bh; }
+            if (window.screen && screen.width > 0 && screen.height > 0) {
+                body.screen_width = screen.width;
+                body.screen_height = screen.height;
+            }
+            body.dpi = Math.round((window.devicePixelRatio || 1) * 96);
+            // Opened inside the click so it is not popup-blocked (see doConnect).
+            var targetWin = window.open('', '_blank');
+            errEl.textContent = '';
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+            fetch('/api/addressbook/adhoc/connect', {
+                method: 'POST',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            })
+            .then(function(res) {
+                if (res.status === 412) {
+                    return res.json().then(function(j) {
+                        var names = (j.missing_variables || []).map(function(n) { return '$' + n; });
+                        throw new Error('You have no credential variable ' + names.join(', ')
+                            + '. Pick one of yours from the list, or set it in My Credentials.');
+                    });
+                }
+                if (!res.ok) return res.text().then(function(t) { throw new Error(apiErrorText(t)); });
+                return res.json();
+            })
+            .then(function(data) {
+                var url = data.client_url + (entry.fullscreen_on_connect ? '?fs=1' : '');
+                if (targetWin && !targetWin.closed) targetWin.location.href = url;
+                else window.open(url, '_blank');
+                document.getElementById('entry-modal').classList.remove('active');
+                if (vaultReady) loadActiveSessions();
+            })
+            .catch(function(err) {
+                if (targetWin && !targetWin.closed) targetWin.close();
+                errEl.textContent = err.message;
+            })
+            .finally(function() {
+                btn.disabled = false;
+                btn.textContent = 'Connect';
+            });
+        }
+        document.getElementById('em-connect').addEventListener('click', doAdhocConnect);
+
+        // Admin: keep the ad-hoc connection as an entry. Credential variables
+        // are stored as the references typed, never as values.
+        document.getElementById('em-saveas').addEventListener('click', function() {
+            var btn = this;
+            var errEl = document.getElementById('em-error');
+            var name = document.getElementById('em-saveas-name').value.trim();
+            var target = document.getElementById('em-saveas-folder').value;
+            if (!target) { errEl.textContent = 'Choose a folder to save the entry in.'; return; }
+            if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
+                errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
+                return;
+            }
+            var sep = target.indexOf('|');
+            var scope = target.slice(0, sep), folder = target.slice(sep + 1);
+            var entry = buildEntryFromForm();
+            delete entry.display_name;
+            var body = { name: name };
+            for (var k in entry) body[k] = entry[k];
+            errEl.textContent = '';
+            btn.disabled = true;
+            fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries', {
+                method: 'POST',
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            })
+            .then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(apiErrorText(t)); });
+                document.getElementById('entry-modal').classList.remove('active');
+                showInfo('Saved "' + name + '" in ' + folder + '.');
+                window.rgSelectFolder(scope, folder);
+            })
+            .catch(function(err) { errEl.textContent = err.message; })
+            .finally(function() { btn.disabled = false; });
         });
 
         // Close modals on overlay click
@@ -5365,9 +5673,9 @@
                 '<br><br>Use it to upload and download files via a shared virtual drive. SSH sessions support SFTP file transfer instead.' +
                 '<br><br>Toggle the file panel with <span class="onboard-key">Ctrl</span>+<span class="onboard-key">Alt</span>+<span class="onboard-key">F</span>.'
             },
-            { title: 'Ad-hoc Sessions', minRole: 3, body:
-                'As a power user, you can create one-off sessions from the <span class="onboard-hl">Sessions</span> page &mdash; useful for quick connections that aren\'t in the connections.' +
-                '<br><br>Choose SSH, RDP, VNC, or Web and enter connection details directly.'
+            { title: 'Connect to a host', minRole: 3, body:
+                'As a power user, you can connect to a host that isn\'t a saved entry with <span class="onboard-hl">Connect to a host</span>, next to the search box on every page.' +
+                '<br><br>It opens the entry editor with every option an entry has. Nothing is saved, and credential fields accept your own credential variables, such as <code>$my_ssh_key</code>.'
             },
             { title: 'Managing the Connections', minRole: 4, body:
                 'As an admin, you can:' +

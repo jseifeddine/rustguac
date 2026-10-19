@@ -1,5 +1,5 @@
 // The global search lifts the brand row above its own results overlay. A
-// page modal (the ad-hoc session dialog, the folder and entry dialogs) must
+// page modal (the ad-hoc connection editor, the folder and entry dialogs) must
 // still cover the search box: nothing from the search chrome may sit on top
 // of an open modal.
 import { test, expect } from '@playwright/test';
@@ -13,16 +13,18 @@ async function topElementAt(page, locator) {
     }, [box.x + box.width / 2, box.y + box.height / 2]);
 }
 
-test('the ad-hoc session modal covers the global search box', async ({ page }) => {
+test('the ad-hoc connection editor covers the global search box', async ({ page }) => {
     await installApi(page, { role: 'poweruser' });
-    await page.goto('/sessions.html');
+    await page.goto('/connections.html');
     await settle(page);
     const search = page.locator('#rg-search');
     await expect(search).toBeVisible();
-    await page.locator('#new-session-btn').click();
-    await expect(page.locator('#adhoc-modal')).toHaveClass(/active/);
-    const top = await topElementAt(page, search);
-    expect(top.closestModal, `the modal overlay must be on top, found ${top.tag}#${top.id}`).toBe(true);
+    await page.locator('#rg-adhoc').click();
+    await expect(page.locator('#entry-modal')).toHaveClass(/active/);
+    for (const el of [search, page.locator('#rg-adhoc')]) {
+        const top = await topElementAt(page, el);
+        expect(top.closestModal, `the modal overlay must be on top, found ${top.tag}#${top.id}`).toBe(true);
+    }
     // And the search box cannot be typed into while the modal is open.
     await page.keyboard.press('/');
     await expect(search).not.toBeFocused();
