@@ -199,6 +199,14 @@ Vendored as the diff of the PR branch against its merge-base with our pinned gua
 
 **Files patched:** `src/protocols/rdp/settings.{c,h}`, `src/protocols/rdp/channels/disp.{c,h}`, `src/protocols/rdp/input.c`, `src/protocols/rdp/user.c`.
 
+## 011-spice-ca-pem.patch
+
+**Bug:** rustguac sends the SPICE CA certificate (the connection entry's PEM, or the Proxmox cluster CA from `spiceproxy`) as the `ca-cert` connect arg, and the plugin from `008` passed it to spice-gtk's `ca-file` property. `ca-file` is a path, so OpenSSL failed to open a "file" named after the PEM text, spice-gtk logged `loading ca certs from ... failed`, fell back to the system trust store, and rejected servers signed by a private CA. See [sol1/rustguac#308](https://github.com/sol1/rustguac/issues/308).
+
+**Fix:** When `ca-cert` contains a PEM header (`-----BEGIN `), pass it in memory through spice-gtk's `ca` property (a `GByteArray` of PEM data, available since spice-gtk 0.15), which adds each certificate to the TLS trust store. Any other value is still treated as a path and passed as `ca-file`. The settings field is renamed `ca_file` -> `ca_cert` to match.
+
+**Files patched:** `src/protocols/spice/auth.c`, `src/protocols/spice/settings.{c,h}`.
+
 ## Applying patches
 
 Patches are applied automatically by all build scripts (`build-deb.sh`, `build-rpm.sh`, `install.sh`, `dev.sh`, `Dockerfile`). To apply manually:
