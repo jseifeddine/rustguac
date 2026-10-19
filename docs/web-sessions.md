@@ -503,7 +503,7 @@ Chromium exited immediately (signal: 6 (SIGABRT)). Chromium's sandbox could not 
 
 SSH, RDP and VNC sessions are not affected.
 
-Run the container with the seccomp profile shipped with rustguac, [`contrib/docker/seccomp-chromium.json`](../contrib/docker/seccomp-chromium.json). It is Docker's default profile with one change: `clone` and `unshare` may create user, PID and network namespaces without `CAP_SYS_ADMIN`. Mount, UTS, IPC and cgroup namespaces are still refused, every other rule is unchanged, and the profile grants no capabilities. The image includes a copy that matches its version:
+Run the container with the seccomp profile shipped with rustguac, [`contrib/docker/seccomp-chromium.json`](../contrib/docker/seccomp-chromium.json). It is Docker's default profile with one change: `clone` and `unshare` may create user, PID and network namespaces without `CAP_SYS_ADMIN`. Mount, UTS, IPC and cgroup namespaces are still refused, every other rule is unchanged, and the profile grants no capabilities. The relaxation applies to every process in the container, not only Chromium, and user namespaces are a common way into kernel bugs, so keep the Docker host's kernel up to date. The image includes a copy that matches its version:
 
 ```bash
 docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chromium.json > seccomp-chromium.json
