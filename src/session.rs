@@ -221,12 +221,30 @@ impl CreateSessionRequest {
     /// - `max_recordings` is that rotation limit.
     /// - `record_typescript` writes a plaintext terminal log; it is an
     ///   admin's choice per entry, not the caller's.
+    /// - `container_username` / `container_password` pin a VDI session to a
+    ///   fixed account. The username also names the container and its home
+    ///   directory under `home_base`, so only an entry may choose it; an
+    ///   ad-hoc session always gets the caller's own container.
+    /// - `kerberos_cache` is a path on the rustguac host.
+    /// - `allow_sharing` is the per-entry sharing switch. Without it an
+    ///   ad-hoc session keeps the ad-hoc default.
+    /// - `wol_*`: Wake-on-LAN makes rustguac send packets to an address of
+    ///   the caller's choosing, so it is configured on entries.
     pub fn clear_entry_only_fields(&mut self) {
         self.address_book_entry = None;
         self.address_book_folder = None;
         self.entry_display_name = None;
         self.max_recordings = None;
         self.record_typescript = None;
+        self.container_username = None;
+        self.container_password = None;
+        self.kerberos_cache = None;
+        self.allow_sharing = None;
+        self.wol_send_packet = None;
+        self.wol_mac_addr = None;
+        self.wol_broadcast_addr = None;
+        self.wol_udp_port = None;
+        self.wol_wait_time = None;
     }
 
     /// Fields that only say how the session is drawn in this browser, not
@@ -275,6 +293,60 @@ impl CreateSessionRequest {
             );
         }
         hex::encode(Sha256::digest(value.to_string().as_bytes()))
+    }
+}
+
+/// The policy for an ad-hoc session: one built from the caller's request
+/// rather than from a saved Connections entry. Every ad-hoc route applies it
+/// to the finished request just before `SessionManager::create_session`.
+///
+/// Admins are trusted to set anything, so their request is left as sent and
+/// only marked unfenced. For anyone else:
+///
+/// - every target, the first jump host and Proxmox endpoints included, is
+///   checked against the network allowlists (`fence_all_targets`);
+/// - the fields only a saved entry may set are dropped
+///   (`clear_entry_only_fields`);
+/// - recording may be turned on, never off: the site-wide setting is the
+///   floor;
+/// - the shared drive may be turned off, never on when `[drive]` leaves it
+///   off;
+/// - VDI CPU, memory and idle timeout are capped at the `[vdi]` defaults
+///   (a default of 0 means no limit, and then nothing is capped).
+pub fn apply_adhoc_policy(req: &mut CreateSessionRequest, is_admin: bool, config: &Config) {
+    req.fence_all_targets = !is_admin;
+    if is_admin {
+        return;
+    }
+    req.clear_entry_only_fields();
+
+    // `None` falls back to the site-wide setting, so a request may only
+    // turn recording on.
+    if req.enable_recording == Some(false) && config.recording_enabled() {
+        req.enable_recording = None;
+    }
+
+    if req.enable_drive == Some(true) && !drive::is_drive_enabled(&config.drive, None) {
+        req.enable_drive = None;
+    }
+
+    match config.vdi.as_ref() {
+        Some(vdi) => {
+            req.container_cpu_limit = req.container_cpu_limit.filter(|&c| {
+                vdi.default_cpu_limit <= 0.0 || (c > 0.0 && c <= vdi.default_cpu_limit)
+            });
+            req.container_memory_limit = req.container_memory_limit.filter(|&m| {
+                vdi.default_memory_limit == 0 || (m > 0 && m <= vdi.default_memory_limit)
+            });
+            req.container_idle_timeout_mins = req
+                .container_idle_timeout_mins
+                .filter(|&t| t <= vdi.idle_timeout_mins);
+        }
+        None => {
+            req.container_cpu_limit = None;
+            req.container_memory_limit = None;
+            req.container_idle_timeout_mins = None;
+        }
     }
 }
 
@@ -703,6 +775,33 @@ fn wol_params(req: &CreateSessionRequest, fence_all_targets: bool) -> guacd::Wol
         udp_port: req.wol_udp_port,
         wait_time: req.wol_wait_time.map(|t| t.min(MAX_WOL_WAIT_SECS)),
     }
+}
+
+/// The account a VDI session logs in as, which also names its container
+/// (`rustguac-vdi-<name>`) and its home directory under `home_base`: the
+/// request's `container_username` when set (only a saved entry or an admin
+/// can set it, see `apply_adhoc_policy`), otherwise derived from the
+/// creator's identity.
+fn vdi_username(container_username: Option<&str>, created_by: &str) -> String {
+    container_username
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            created_by
+                .split('@')
+                .next()
+                .unwrap_or(created_by)
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect::<String>()
+        })
+}
+
+/// Whether a session is recorded: the request's choice, or the site-wide
+/// setting when it makes none.
+fn recording_enabled_for(enable_recording: Option<bool>, config: &Config) -> bool {
+    enable_recording.unwrap_or(config.recording_enabled())
 }
 
 /// An address formatted for a `host:port` string (IPv6 in brackets), as
@@ -1622,21 +1721,7 @@ impl SessionManager {
                         ));
                     }
                 }
-                let vdi_username = req
-                    .container_username
-                    .as_ref()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        created_by
-                            .split('@')
-                            .next()
-                            .unwrap_or(&created_by)
-                            .to_lowercase()
-                            .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                            .collect::<String>()
-                    });
+                let vdi_username = vdi_username(req.container_username.as_deref(), &created_by);
                 let vdi_password = req
                     .container_password
                     .as_ref()
@@ -1958,9 +2043,7 @@ impl SessionManager {
             (Some(stream), connection_id, None)
         };
 
-        let recording_enabled = req
-            .enable_recording
-            .unwrap_or(self.config.recording_enabled());
+        let recording_enabled = recording_enabled_for(req.enable_recording, &self.config);
 
         // Spawn login script if configured (web sessions with CDP port)
         let login_script_handle =
@@ -2837,6 +2920,189 @@ mod tests {
         // What the caller may choose is left alone.
         assert_eq!(req.hostname.as_deref(), Some("10.0.0.1"));
         assert_eq!(req.enable_recording, Some(true));
+    }
+
+    // ── Ad-hoc session policy ──
+
+    fn policy_request(body: serde_json::Value) -> CreateSessionRequest {
+        serde_json::from_value(body).unwrap()
+    }
+
+    fn policy_config(toml_extra: &str) -> Config {
+        let mut config: Config = toml::from_str(toml_extra).unwrap();
+        config.recording_path = std::env::temp_dir();
+        config
+    }
+
+    const VDI_LIMITS: &str = "[vdi]\nenabled = true\ndefault_cpu_limit = 2.0\n\
+                              default_memory_limit = 4096\nidle_timeout_mins = 60\n";
+
+    /// A request carrying every field the policy touches, set the way a
+    /// caller trying to get around it would set them.
+    fn hostile_request() -> CreateSessionRequest {
+        policy_request(serde_json::json!({
+            "session_type": "vdi",
+            "container_image": "desktop:latest",
+            "container_username": "alice",
+            "container_password": "hunter2",
+            "container_cpu_limit": 64.0,
+            "container_memory_limit": 1048576,
+            "container_idle_timeout_mins": 525600,
+            "kerberos_cache": "/etc/krb5.keytab",
+            "allow_sharing": true,
+            "enable_recording": false,
+            "enable_drive": true,
+            "address_book_entry": "shared/prod/db01",
+            "max_recordings": 1,
+            "record_typescript": true,
+            "wol_send_packet": true,
+            "wol_mac_addr": "00:11:22:33:44:55",
+            "wol_broadcast_addr": "192.0.2.255",
+            "wol_udp_port": 9,
+            "wol_wait_time": 30,
+        }))
+    }
+
+    #[test]
+    fn adhoc_policy_drops_entry_only_fields_and_fences() {
+        let config = policy_config(VDI_LIMITS);
+        let mut req = hostile_request();
+        apply_adhoc_policy(&mut req, false, &config);
+        assert!(req.fence_all_targets);
+        assert_eq!(req.container_username, None);
+        assert_eq!(req.container_password, None);
+        assert_eq!(req.kerberos_cache, None);
+        assert_eq!(req.allow_sharing, None);
+        assert_eq!(req.address_book_entry, None);
+        assert_eq!(req.max_recordings, None);
+        assert_eq!(req.record_typescript, None);
+        assert_eq!(req.wol_send_packet, None);
+        assert_eq!(req.wol_mac_addr, None);
+        assert_eq!(req.wol_broadcast_addr, None);
+        assert_eq!(req.wol_udp_port, None);
+        assert_eq!(req.wol_wait_time, None);
+        // What the caller may choose is left alone.
+        assert_eq!(req.container_image.as_deref(), Some("desktop:latest"));
+    }
+
+    #[test]
+    fn adhoc_vdi_session_always_gets_the_callers_own_container() {
+        // The VDI username names the container and its home directory, so
+        // an ad-hoc request naming another user must not land in theirs.
+        let config = policy_config(VDI_LIMITS);
+        let mut req = hostile_request();
+        apply_adhoc_policy(&mut req, false, &config);
+        assert_eq!(
+            vdi_username(req.container_username.as_deref(), "Mallory.X@example.com"),
+            "mallory_x"
+        );
+    }
+
+    #[test]
+    fn adhoc_policy_never_turns_site_recording_off() {
+        let on = policy_config("");
+        assert!(on.recording_enabled());
+        let mut req = policy_request(serde_json::json!({ "enable_recording": false }));
+        apply_adhoc_policy(&mut req, false, &on);
+        assert!(recording_enabled_for(req.enable_recording, &on));
+
+        // Turning it on is always allowed, with recording on or off site-wide.
+        let off = policy_config("[recording]\nenabled = false\n");
+        for config in [&on, &off] {
+            let mut req = policy_request(serde_json::json!({ "enable_recording": true }));
+            apply_adhoc_policy(&mut req, false, config);
+            assert!(recording_enabled_for(req.enable_recording, config));
+        }
+        let mut req = policy_request(serde_json::json!({ "enable_recording": false }));
+        apply_adhoc_policy(&mut req, false, &off);
+        assert!(!recording_enabled_for(req.enable_recording, &off));
+    }
+
+    #[test]
+    fn adhoc_policy_never_turns_a_disabled_drive_on() {
+        for disabled in [
+            policy_config(""),
+            policy_config("[drive]\nenabled = false\n"),
+        ] {
+            let mut req = policy_request(serde_json::json!({ "enable_drive": true }));
+            apply_adhoc_policy(&mut req, false, &disabled);
+            assert!(!drive::is_drive_enabled(&disabled.drive, req.enable_drive));
+        }
+        // Where the site enables it, a caller may still turn it off.
+        let enabled = policy_config("[drive]\nenabled = true\n");
+        let mut req = policy_request(serde_json::json!({ "enable_drive": false }));
+        apply_adhoc_policy(&mut req, false, &enabled);
+        assert!(!drive::is_drive_enabled(&enabled.drive, req.enable_drive));
+        let mut req = policy_request(serde_json::json!({ "enable_drive": true }));
+        apply_adhoc_policy(&mut req, false, &enabled);
+        assert!(drive::is_drive_enabled(&enabled.drive, req.enable_drive));
+    }
+
+    #[test]
+    fn adhoc_policy_caps_vdi_resources_at_the_site_defaults() {
+        let config = policy_config(VDI_LIMITS);
+        // Over the defaults (or 0, which Docker reads as unlimited) falls
+        // back to the default.
+        let mut req = hostile_request();
+        apply_adhoc_policy(&mut req, false, &config);
+        assert_eq!(req.container_cpu_limit, None);
+        assert_eq!(req.container_memory_limit, None);
+        assert_eq!(req.container_idle_timeout_mins, None);
+        let mut req = policy_request(serde_json::json!({
+            "container_cpu_limit": 0.0, "container_memory_limit": 0,
+        }));
+        apply_adhoc_policy(&mut req, false, &config);
+        assert_eq!(req.container_cpu_limit, None);
+        assert_eq!(req.container_memory_limit, None);
+        // At or under them is kept.
+        let mut req = policy_request(serde_json::json!({
+            "container_cpu_limit": 1.5, "container_memory_limit": 4096,
+            "container_idle_timeout_mins": 0,
+        }));
+        apply_adhoc_policy(&mut req, false, &config);
+        assert_eq!(req.container_cpu_limit, Some(1.5));
+        assert_eq!(req.container_memory_limit, Some(4096));
+        assert_eq!(req.container_idle_timeout_mins, Some(0));
+        // A default of 0 is no limit, so there is nothing to cap at.
+        let unlimited = policy_config("[vdi]\nenabled = true\n");
+        let mut req = policy_request(serde_json::json!({
+            "container_cpu_limit": 8.0, "container_memory_limit": 65536,
+        }));
+        apply_adhoc_policy(&mut req, false, &unlimited);
+        assert_eq!(req.container_cpu_limit, Some(8.0));
+        assert_eq!(req.container_memory_limit, Some(65536));
+    }
+
+    #[test]
+    fn adhoc_policy_leaves_an_admin_request_as_sent() {
+        let config = policy_config(VDI_LIMITS);
+        let before = serde_json::to_value(hostile_request()).unwrap();
+        let mut req = hostile_request();
+        apply_adhoc_policy(&mut req, true, &config);
+        assert!(!req.fence_all_targets);
+        assert_eq!(serde_json::to_value(&req).unwrap(), before);
+        assert_eq!(
+            vdi_username(req.container_username.as_deref(), "admin@example.com"),
+            "alice"
+        );
+        assert!(!recording_enabled_for(req.enable_recording, &config));
+    }
+
+    #[test]
+    fn saved_entry_settings_still_reach_the_session() {
+        // Entry connects never pass through the ad-hoc policy: an entry's
+        // fixed VDI account, its recording opt-out and its drive opt-in
+        // still apply.
+        let config = policy_config(VDI_LIMITS);
+        let req = hostile_request();
+        assert!(!req.fence_all_targets);
+        assert_eq!(
+            vdi_username(req.container_username.as_deref(), "bob@example.com"),
+            "alice"
+        );
+        assert!(!recording_enabled_for(req.enable_recording, &config));
+        assert!(drive::is_drive_enabled(&config.drive, req.enable_drive));
+        assert_eq!(req.container_cpu_limit, Some(64.0));
     }
 
     #[test]

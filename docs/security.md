@@ -74,6 +74,16 @@ Jump hosts and Proxmox clusters in connection entries, and in sessions created b
 
 SSH and VNC connections are made to the address that was checked rather than to the hostname, so a name cannot resolve to an allowed address for the check and to another address for the connection. RDP, SPICE and web sessions keep the hostname, because TLS certificate names and Kerberos need it; for those, a user who controls a hostname's DNS could in principle answer differently between the check and the connection. Where that matters, use IP addresses in connection entries and keep the RDP list narrow. Targets reached through jump hosts are resolved by the bastion, so only the first jump host is checked locally.
 
+### Ad-hoc sessions from non-admins
+
+A session a poweruser creates from their own request (`POST /api/sessions`, or `GET /api/connect` without an entry) is not a connection entry, so it gets none of an entry's trust. Besides the allowlist checks above:
+
+- Settings an admin makes on an entry are ignored when a poweruser sends them: recording attribution and rotation (`address_book_entry`, `max_recordings`), typescript recording, sharing, Wake-on-LAN, a Kerberos credential cache path on the rustguac host, and a fixed VDI account (`container_username` / `container_password`). A VDI session always runs in the caller's own container, with the caller's own home directory.
+- Site-wide recording cannot be switched off for the session, and a drive disabled in `[drive]` cannot be switched on.
+- VDI CPU, memory and idle timeout are capped at the `[vdi]` defaults.
+
+Admins (an admin API key included) and connection entries are trusted to set all of these.
+
 ## Authentication
 
 rustguac supports two parallel authentication paths. See [Roles and Access Control](roles-and-access-control.md) for the full role system.

@@ -237,7 +237,15 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `wol_wait_time` | integer | SSH, RDP, VNC | Seconds to wait for the host to boot before connecting (at most 600) |
 | `owner` | string | All | Create the session on behalf of this user (their login email). Admin callers only, see [Creating a session for someone else](#creating-a-session-for-someone-else) |
 
-Wake-on-LAN settings are ignored on sessions created by non-admin users; set them on a connection entry instead.
+**Sessions created by non-admin users.** A request from a poweruser is held to a stricter policy than a connection entry or an admin; the same policy applies to the ad-hoc mode of `GET /api/connect`:
+
+- Every target is checked against the network allowlists, including the first jump host and the Proxmox VE API and SPICE proxy (see [Network allowlists](security.md#network-allowlists-ssrf-protection)).
+- Fields that only a connection entry may set are ignored: `address_book_entry`, `address_book_folder`, `entry_display_name`, `max_recordings`, `record_typescript`, `container_username`, `container_password`, `kerberos_cache`, `allow_sharing` and the Wake-on-LAN fields (`wol_*`). A VDI session always uses the caller's own container.
+- `enable_recording` can turn recording on, but not off while recording is enabled site-wide.
+- `enable_drive` can turn the drive off, but not on while `[drive]` leaves it disabled.
+- `container_cpu_limit`, `container_memory_limit` and `container_idle_timeout_mins` above the `[vdi]` defaults (`default_cpu_limit`, `default_memory_limit`, `idle_timeout_mins`) fall back to those defaults. A default of 0 means no limit and caps nothing.
+
+Requests from admins, an admin API key included, are used as sent.
 
 **SPICE fields** (`session_type: spice`, direct connection to a SPICE server):
 

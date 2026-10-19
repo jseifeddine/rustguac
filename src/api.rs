@@ -30,13 +30,11 @@ pub async fn create_session(
     Json(mut req): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
     let identity = identity.map(|Extension(id)| id);
-    // Ad-hoc targets from anyone below admin get every network fence, and
-    // none of the fields only a saved entry may set.
+    // Ad-hoc targets from anyone below admin get every network fence, none
+    // of the fields only a saved entry may set, and the site's recording,
+    // drive and VDI limits.
     let is_admin = identity.as_ref().is_some_and(|id| id.has_role("admin"));
-    req.fence_all_targets = !is_admin;
-    if !is_admin {
-        req.clear_entry_only_fields();
-    }
+    crate::session::apply_adhoc_policy(&mut req, is_admin, manager.config());
     let caller_name = identity
         .as_ref()
         .map(|id| id.display_name().to_string())
@@ -7145,7 +7143,7 @@ pub async fn quick_connect(
         "Quick connect (ad-hoc)"
     );
 
-    let create_req = CreateSessionRequest {
+    let mut create_req = CreateSessionRequest {
         session_type,
         hostname: query.hostname,
         port: query.port,
@@ -7225,6 +7223,7 @@ pub async fn quick_connect(
         wol_udp_port: None,
         wol_wait_time: None,
     };
+    crate::session::apply_adhoc_policy(&mut create_req, id.has_role("admin"), manager.config());
 
     match manager.create_session(create_req, admin_name).await {
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
