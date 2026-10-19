@@ -255,7 +255,7 @@ Requests from admins, an admin API key included, are used as sent.
 | `port` | integer | SPICE port (default 5900) |
 | `password` | string | SPICE password / ticket |
 | `spice_tls` | boolean | Connect using TLS |
-| `spice_tls_port` | integer | TLS port, when different from `port` |
+| `spice_tls_port` | integer | TLS port, when different from `port` (defaults to `port`) |
 | `spice_ca_cert` | string | PEM CA certificate for TLS verification |
 | `spice_cert_subject` | string | Expected TLS certificate subject |
 | `spice_proxy` | string | SPICE proxy URL, e.g. `http://host:3128` |

@@ -1852,14 +1852,8 @@ impl SessionManager {
                     guacd::ConnectionParams::Ssh(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Rdp(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Vnc(p) => (p.hostname.clone(), p.port),
-                    // TLS SPICE connects on tls_port, so tunnel that port.
-                    guacd::ConnectionParams::Spice(p) => {
-                        if p.tls {
-                            (p.hostname.clone(), p.tls_port.unwrap_or(p.port))
-                        } else {
-                            (p.hostname.clone(), p.port)
-                        }
-                    }
+                    // Tunnel the port guacd would dial (tls_port for TLS SPICE).
+                    guacd::ConnectionParams::Spice(p) => (p.hostname.clone(), p.dial_port()),
                 }
             };
 
