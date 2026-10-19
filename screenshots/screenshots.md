@@ -1,75 +1,153 @@
 # Screenshots
 
-Screenshots of rustguac with the default **aurora** theme, OIDC authentication, Vault-backed Connections, and session recording. User-identifying data has been sanitised.
+Screenshots of rustguac v1.12.1 with the default title, logo and **aurora**
+theme, OIDC sign-in, Vault-backed connections and session recording. The
+[`light/`](light/) folder has the same pages in the built-in **light** theme.
+
+All data is fictional: users are `@example.com`, and hosts use
+`*.example.com`, `*.example.net`, `*.example.internal` and the documentation
+address ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). The SSH, web
+and recording content comes from real sessions to throwaway demo containers.
+[`contrib/screenshots`](../contrib/screenshots/) rebuilds the whole set.
 
 ## Connections
 
 ![Connections](connections.png)
 
-Vault-backed connection list (previously "Address Book", renamed in v1.6.0). The left sidebar shows the folder tree with lazy-loaded subfolders; scope icons indicate **⊕** shared or **▣** instance-only. Each folder has its own group access control via `allowed_groups`. Entries support SSH, RDP, VNC, Web (headless Chromium) and VDI (Docker container) session types — the type badge is colour-coded. **Login...** prompts for credentials at connect time; **Connect** launches immediately with stored credentials.
+The Connections page. The left sidebar lists the folders with a filter box,
+an entry count per folder and a scope marker; the selected folder
+(Production) shows its SSH and Web entries with type badges, hosts, users,
+**Connect** and pop-out buttons, and edit, clone and delete actions. The
+search box at the top searches every connection, and the **Type** filter
+narrows the folder's list. A banner at the top says how many of the user's
+credential variables still need a value.
 
 ## My Credentials
 
 ![My Credentials](my_credentials.png)
 
-Per-user credential store, opened from the **Credentials** nav link (or the Settings menu). Credential variables referenced across entries are grouped by domain in collapsible sections, with a filter box for long lists; password and key fields are masked. When more than one Vault backend is configured, each credential gains a **Shared across sites** toggle (central shared Vault vs local instance). Values live per-user in Vault, never on disk or in the browser.
+The **My Credentials** dialog, opened from the **Credentials** link. The
+credential variables used by the user's entries are grouped by prefix (AD,
+CORP, EXAMPLECORP), each showing how many entries use it, with a filter box
+for long lists. Saved passwords are never sent back to the browser; they show
+as "saved – leave blank to keep". Values are stored per user in Vault.
 
 ## RDP Connection Editor
 
 ![RDP Connection](rdp_connection.png)
 
-Entry editor for an RDP connection. Supports all RDP-specific fields: domain, security mode, NLA authentication package (Kerberos/NTLM), KDC Proxy URL, certificate error handling, prompt-credentials-at-connect-time, file transfer via drive redirection, RemoteApp (RAIL), and per-entry recording settings.
+Editing an RDP entry: hostname and port, credential variables for the
+username and domain (`$ad_username`, `$ad_domain`), security mode, keyboard
+layout, the ignore-certificate option, NLA authentication package, Kerberos
+KDC URL, monitor count, prompt-for-credentials, file transfer, and the
+collapsible RemoteApp, recording and video performance sections.
 
 ## Web Browser Session Editor
 
 ![Web Session](web_connection.png)
 
-Entry editor for a web browser session. Spawns a headless Chromium on an Xvnc display and streams it via VNC through guacd. Features include an optional pre-connect banner, a collapsible **Automation** section (username/password for URL substitution, login script dropdown), an **Autofill** table (populate Chromium's saved-credentials store via `$USERNAME` / `$PASSWORD` substitution), **Allowed Domains** restriction (Chromium `--host-rules` blocks everything else), and per-entry recording settings.
+Editing a Web entry, which opens the URL in a Chromium instance on the server
+and streams it to the user. The **Automation** section holds the username and
+password used for URL substitution and login scripts, **Autofill** fills a
+login form on `sso.example.com` with the entry's credentials, and **Allowed
+Domains** limits the browser to `admin.staging.example.com` and
+`sso.example.com`. Clipboard copy and paste can be disabled per entry.
 
 ## VDI Connection Editor
 
 ![VDI Connection](vdi_connection.png)
 
-Entry editor for a VDI session (new in v1.5.0). rustguac spawns an ephemeral Docker container running xrdp and connects guacd to it via RDP. Editor fields: container image (from the admin allowlist), CPU and memory limits, extra environment variables, idle timeout, pre-connect banner, recording, clipboard copy/paste control, v1.6.0's **Allow session sharing** toggle, and v1.6.0's **Auto-open when this is the user's only entry** (kiosk mode).
+Editing a VDI entry, which starts a Docker desktop container for the user and
+connects to it over RDP. The editor sets the container image, CPU and memory
+limits, environment variables, an optional fixed container username and
+password, the idle timeout, a pre-connect banner, recording and clipboard
+options, session sharing, and auto-open when this is the user's only entry.
 
 ## SSH Tunnel / Jump Hosts
 
 ![SSH Tunnel](ssh-tunnel.png)
 
-Multi-hop SSH tunnel configuration with a live flow diagram. Each hop is a collapsible card with its own hostname, port, credentials, and pinned host key. The diagram `You → bastion1 → bastion2 → internal-db` updates as you edit. Recording is captured for the final hop's session; clipboard copy/paste can be disabled per-entry.
+The **SSH Tunnel / Jump Hosts** section of an entry, scrolled to the bottom
+of the editor. The route `You → bastion.example.com →
+jump-db.example.internal → db-01.example.internal:22` updates as hops are
+edited. Each hop is a card with its own port, credentials, private key and a
+**Verify Host Key** button for pinning the host key. Below are the
+Wake-on-LAN section and the session sharing, auto-open, fullscreen and
+side-tab options.
 
 ## Sessions
 
 ![Sessions](sessions_view_with_adhoc.png)
 
-Ad-hoc session creation page. Powerusers can create sessions to any target by choosing a protocol (SSH, RDP, VNC, Web, VDI), entering connection details, and optionally configuring SSH tunnel jump hosts. The **Sessions** panel at the bottom shows active and pending sessions — in v1.6.0 this became owner-scoped by default; admins see all sessions on this page via `?all=true`.
+The Sessions page with four active SSH and Web sessions. An admin can
+**watch** or **shadow** another user's session, or end it. The search box
+and the **Type**, **User**, **Owner** and **Status** filters narrow the
+list, and **New ad-hoc session** opens a form for connecting to a host that
+has no saved entry.
+
+## Live SSH Session
+
+![SSH Session](ssh_session.png)
+
+An SSH session in the browser client, running `htop` on a demo host. The
+**Clipboard**, **Files** and **Controls** tabs sit on the left edge.
+
+## Live Web Session
+
+![Web Session](web_session.png)
+
+A Web session: a Chromium instance on the server, here showing a fictional
+service status page, streamed into the browser. The **Clipboard** and
+**Controls** tabs sit on the left edge.
 
 ## Session Recording Playback
 
 ![Recording Player](recordings_player_histogram.png)
 
-Session recording player with audio-style activity histogram. Recordings use the standard Guacamole `.guac` format. The player supports play/pause, click-to-seek, and full-screen; the histogram shows activity density across the recording timeline so reviewers can jump to the "busy" parts of a long session.
+Replaying a recorded SSH session in the browser. Recordings use the
+Guacamole `.guac` format. The activity histogram along the seek bar shows
+where a recording is busy, so a reviewer can jump straight to it.
 
 ## Recordings List
 
 ![Recordings](recordings_view.png)
 
-Recordings management page. Lists all recorded sessions with entry, user, protocol, folder, size, and date; the search bar filters across all fields. Recordings capture all screen activity for audit and compliance. Access is restricted to `poweruser+` from v1.5.4; deletion is admin-only.
+The Recordings page lists recorded sessions by entry, user, type, folder,
+size and date, with a search box and **Type**, **Folder** and **User**
+filters. Each recording can be played, downloaded as a `.guac` file or as an
+MP4 video, or deleted.
 
 ## Reports
 
 ![Reports](reports_view.png)
 
-Reports dashboard — aggregate counters (total sessions, total hours, unique users, active now) plus a filterable session history table with CSV export. Each row links to the user, entry, folder, protocol, target host and start time. Useful for billing, audit, and capacity planning.
+The Reports page: totals for sessions, hours, unique users and active
+sessions, above the session history. The history can be searched, filtered
+by type, folder, user and status, and exported as CSV, and rows with a
+recording link to it.
 
 ## Admin
 
 ![Admin Console](admin_console.png)
 
-Admin page. System Status cards show rustguac version, active sessions (pending/total), user count, session-history depth, recording count and disk usage, disk pressure, Vault connection health, and enabled features (OIDC, Drive, TLS, Vault). Below is the Users table with role assignment, group membership (from OIDC claims), status and last-login, and per-user actions (disable, force-logout, delete).
+The Admin page. The system status cards show the version, active sessions,
+users, session history, recordings, disk usage, Vault status and enabled
+features. Below is the users table with each user's role, OIDC groups,
+status and last login, and actions to disable, force a logout or delete.
 
-## Group Mappings + User API Tokens
+## API Tokens
 
 ![Tokens](tokens_view.png)
 
-Further down the Admin page: **Group-to-Role Mappings** matches OIDC group names to rustguac roles (admin / poweruser / operator / viewer) — highest matching role wins on every login. **User API Tokens** lists OIDC-user-owned tokens issued for API access, with max-role cap, expiry, last-used timestamp, and revocation. Admins can create tokens on behalf of operators. Tokens are SHA-256 hashed at rest — the plaintext is shown once at creation and never again.
+The Tokens page, where users create personal API tokens with an optional
+role cap and expiry date. Each token shows its maximum role, expiry, creation
+date and last use, and can be revoked. The token value is shown only once,
+when it is created.
+
+## Themes
+
+![Themes](themes.png)
+
+The same Connections page in four of the built-in themes: aurora (the
+default), light, nord and jaguar. See [Themes](../docs/themes.md) for the
+full list and for adding your own.
