@@ -1,0 +1,81 @@
+diff --git a/src/protocols/spice/auth.c b/src/protocols/spice/auth.c
+index ac89c90a..f381f875 100644
+--- a/src/protocols/spice/auth.c
++++ b/src/protocols/spice/auth.c
+@@ -51,9 +51,20 @@ void guac_spice_session_configure(guac_client* client, SpiceSession* session) {
+ 
+         g_object_set(session, "tls-port", settings->tls_port, NULL);
+ 
+-        /* Provide CA certificate for verification, if given */
+-        if (settings->ca_file != NULL)
+-            g_object_set(session, "ca-file", settings->ca_file, NULL);
++        /* Provide CA certificate for verification, if given. PEM data is
++         * passed in memory through the "ca" property; anything else is
++         * treated as the path to a CA file. */
++        if (settings->ca_cert != NULL) {
++            if (strstr(settings->ca_cert, "-----BEGIN ") != NULL) {
++                GByteArray* ca = g_byte_array_new();
++                g_byte_array_append(ca, (const guint8*) settings->ca_cert,
++                        strlen(settings->ca_cert));
++                g_object_set(session, "ca", ca, NULL);
++                g_byte_array_unref(ca);
++            }
++            else
++                g_object_set(session, "ca-file", settings->ca_cert, NULL);
++        }
+ 
+         /* Provide expected certificate subject, if given */
+         if (settings->cert_subject != NULL)
+diff --git a/src/protocols/spice/settings.c b/src/protocols/spice/settings.c
+index c2600f4f..2ea1914c 100644
+--- a/src/protocols/spice/settings.c
++++ b/src/protocols/spice/settings.c
+@@ -140,8 +140,9 @@ enum SPICE_ARGS_IDX {
+     IDX_TLS,
+ 
+     /**
+-     * The path to a PEM-encoded certificate authority file used to verify the
+-     * SPICE server's TLS certificate.
++     * The certificate authority used to verify the SPICE server's TLS
++     * certificate: either PEM-encoded certificate data, or the path to a file
++     * containing it.
+      */
+     IDX_CA_CERT,
+ 
+@@ -515,7 +516,7 @@ guac_spice_settings* guac_spice_parse_args(guac_user* user,
+         guac_user_parse_args_boolean(user, GUAC_SPICE_CLIENT_ARGS, argv,
+                 IDX_TLS, false);
+ 
+-    settings->ca_file =
++    settings->ca_cert =
+         guac_user_parse_args_string(user, GUAC_SPICE_CLIENT_ARGS, argv,
+                 IDX_CA_CERT, NULL);
+ 
+@@ -801,7 +802,7 @@ void guac_spice_settings_free(guac_spice_settings* settings) {
+     guac_mem_free(settings->tls_port);
+     guac_mem_free(settings->username);
+     guac_mem_free(settings->password);
+-    guac_mem_free(settings->ca_file);
++    guac_mem_free(settings->ca_cert);
+     guac_mem_free(settings->cert_subject);
+     guac_mem_free(settings->pubkey);
+     guac_mem_free(settings->proxy);
+diff --git a/src/protocols/spice/settings.h b/src/protocols/spice/settings.h
+index 8c3018d4..c2425472 100644
+--- a/src/protocols/spice/settings.h
++++ b/src/protocols/spice/settings.h
+@@ -129,10 +129,11 @@ typedef struct guac_spice_settings {
+     bool tls;
+ 
+     /**
+-     * The path to a PEM-encoded certificate authority file used to verify the
+-     * SPICE server's TLS certificate, or NULL if no CA file was provided.
++     * The certificate authority used to verify the SPICE server's TLS
++     * certificate, or NULL if none was provided. This is either PEM-encoded
++     * certificate data or the path to a file containing it.
+      */
+-    char* ca_file;
++    char* ca_cert;
+ 
+     /**
+      * The expected subject of the SPICE server's TLS certificate, or NULL if
