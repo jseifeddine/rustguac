@@ -556,12 +556,12 @@ This allows a fleet of rustguac instances to share common entries while maintain
 
 ### Entry types
 
-Connections entries can be SSH, RDP, VNC, or Web connections. Each entry stores:
+Connections entries can be SSH, RDP, VNC, SPICE, Proxmox VE console, Web, or VDI connections (see [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) and [VDI Desktop Containers](vdi.md)). Each entry stores:
 
 - Connection type and target (hostname, port, URL)
 - Credentials (username, password, private key)
 - Protocol-specific settings (domain, security mode, certificate ignore, drive override)
-- **Multi-hop SSH tunnel chain** — optional ordered list of SSH bastion hosts to route through (all session types)
+- **Multi-hop SSH tunnel chain** — optional ordered list of SSH bastion hosts to route through (all session types except VDI)
 - **Prompt for credentials** — when enabled, users are asked for username/password at connect time, even if stored credentials exist
 - **NLA auth package** (RDP only) — force Kerberos or NTLM for NLA authentication
 - **KDC URL** (RDP only) — Kerberos Key Distribution Center proxy URL
@@ -642,6 +642,8 @@ At least one of `password` or `private_key` should be provided per hop.
 | SSH | Yes | Tunnel forwards to SSH target |
 | RDP | Yes | Tunnel forwards to RDP target |
 | VNC | Yes | Tunnel forwards to VNC target |
+| SPICE | Yes | Tunnel forwards to the SPICE server's TLS port with TLS on, otherwise its plain port. See [SPICE and Proxmox VE](spice-and-proxmox.md#ssh-tunnels-and-jump-hosts) |
+| Proxmox VE | Yes | Two tunnels: one to the PVE API, one to the SPICE proxy Proxmox returns. See [SPICE and Proxmox VE](spice-and-proxmox.md#ssh-tunnels-and-jump-hosts) |
 | Web | Yes | Tunnel forwards to URL host:port; URL is rewritten to `127.0.0.1:{tunnel_port}` |
 | SPICE | Yes | Tunnel forwards to the SPICE host; with TLS on, to `tls_port` (or `port` if no TLS port is set), otherwise to `port` |
 | Proxmox VE | Yes | The PVE API and the SPICE proxy that Proxmox returns are each tunnelled through the chain |

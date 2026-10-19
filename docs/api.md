@@ -273,7 +273,7 @@ Requests from admins, an admin API key included, are used as sent.
 | `proxmox_token_secret` | string | API token secret (the UUID half) |
 | `proxmox_verify_tls` | boolean | Verify the PVE / SPICE-proxy TLS certificate (default false; PVE ships a self-signed cluster cert) |
 
-The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. rustguac calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token.
+The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. rustguac calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token. See [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) for the connect flow, TLS options and troubleshooting.
 
 **Jump host object fields:**
 
@@ -624,7 +624,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
 | `external_id` | string | All | Stable id of the record the entry is synced from (the [NetBox webhook](netbox.md#create-webhook-device-createdupdated) sends `netbox:device:<id>`). What `PUT ...?move=true` matches on; never used to connect. Preserved on update when omitted. |
 
-For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted.
+For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted. See [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) for the editor fields and how the token is stored.
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
