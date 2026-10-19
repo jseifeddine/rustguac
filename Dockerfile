@@ -120,6 +120,10 @@ COPY --from=rust-builder /build/target/release/rustguac /opt/rustguac/bin/rustgu
 # Install static web assets
 COPY static/ /opt/rustguac/static/
 
+# Seccomp profile that lets Chromium's sandbox start, for the host to pass to
+# `docker run --security-opt seccomp=...` (see docs/web-sessions.md)
+COPY contrib/docker/seccomp-chromium.json /opt/rustguac/seccomp-chromium.json
+
 # Library path for guacd
 RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
 
