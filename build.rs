@@ -13,6 +13,7 @@ const DOC_FILES: &[&str] = &[
     "rdp-video-performance.md",
     "web-sessions.md",
     "vdi.md",
+    "spice-and-proxmox.md",
     "security.md",
     "roles-and-access-control.md",
     "integrations.md",
