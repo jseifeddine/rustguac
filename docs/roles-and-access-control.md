@@ -349,10 +349,10 @@ sqlite3 -header -column /opt/rustguac/data/rustguac.db \
 ```
 created_at           os_user  action       target  details
 -------------------  -------  -----------  ------  ------------------------------
-2026-09-19 04:11:02  dave     map_group    staff   role=viewer
-2026-09-19 04:11:05  dave     remap_group  staff   from=viewer to=admin
-2026-09-19 04:11:07  dave     add_admin    ops     ip_allowlist=true expiry=false
-2026-09-19 04:11:09  dave     rotate_key   ops
+2026-09-19 04:11:02  alice    map_group    staff   role=viewer
+2026-09-19 04:11:05  alice    remap_group  staff   from=viewer to=admin
+2026-09-19 04:11:07  alice    add_admin    ops     ip_allowlist=true expiry=false
+2026-09-19 04:11:09  alice    rotate_key   ops
 ```
 
 Entries are subject to the same retention cleanup as the API audit logs and are removed after 90 days.

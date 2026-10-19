@@ -67,7 +67,7 @@ Retry-After: 60
 
         <!-- If this Javascript is uncommented, it will redirect this 403 Forbidden page to the Knocknoc user portal login, which can then redirect back to the protected website once access is granted. -->
         <!-- <script>
-                const baseUrl = '<<INSERT KNOCKNOC USER LOGIN PORTAL URL, eg: knocknoc.mycompany.com>>';
+                const baseUrl = '<<INSERT KNOCKNOC USER LOGIN PORTAL URL, eg: knocknoc.example.com>>';
 
                 setTimeout(() => {
                         const currentUrl = document.URL;
