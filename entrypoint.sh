@@ -1,5 +1,8 @@
-#!/bin/sh
-# Entrypoint script: starts guacd in background, then rustguac in background, waiting on both to exit
+#!/bin/bash
+# Entrypoint script: starts guacd and rustguac in the background. tini (PID 1)
+# passes stop signals to both. If either one exits, the other is stopped and
+# the container exits with that status, so a restart policy can bring it back
+# rather than leaving rustguac running without guacd.
 set -e
 
 # Copy default config on first run (if no config file is mounted/present)
@@ -41,9 +44,19 @@ fi
 echo "guacd started (pid=$GUACD_PID)"
 
 
-# Run rustguac in foreground
 echo "Starting rustguac..."
 /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" serve &
 RUSTGUAC_PID=$!
 
-wait $GUACD_PID $RUSTGUAC_PID
+# Wait for whichever exits first, then stop the other.
+set +e
+wait -n "$GUACD_PID" "$RUSTGUAC_PID"
+STATUS=$?
+if ! kill -0 "$GUACD_PID" 2>/dev/null; then
+    echo "guacd exited (status $STATUS), stopping rustguac"
+else
+    echo "rustguac exited (status $STATUS), stopping guacd"
+fi
+kill "$GUACD_PID" "$RUSTGUAC_PID" 2>/dev/null
+wait
+exit "$STATUS"
