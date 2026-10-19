@@ -55,6 +55,12 @@ Credential variables are expanded at connect time in the following entry fields:
 
 VDI entries that auto-derive credentials (the default for images that honour `VDI_USERNAME`/`VDI_PASSWORD`) do not need credential variables. They only apply when an admin has set explicit `container_username` / `container_password` overrides for an image with a baked-in account.
 
+### Ad-hoc connections
+
+**Connect to a host** (beside the search box on every page) (poweruser and up) accepts your own variables in its credential fields, so an SSH key you use everywhere is one pick rather than a paste: choose `$my_ssh_key` from the list under the private key field, or type a name the username field suggests. Only the variable names reach the browser; the server resolves them from your My Credentials when connecting, exactly as for a saved entry, and a name you have not set is reported before anything connects.
+
+Only your own variables are used, and folder default credentials never apply (an ad-hoc connection has no folder). Variables in jump host credentials are not resolved. An admin who saves an ad-hoc connection as an entry (**Save as entry**) saves the `$name` references, not the values. `POST /api/sessions` does not resolve variables; see [`POST /api/addressbook/adhoc/connect`](api.md#post-apiaddressbookadhocconnect).
+
 ## My Credentials dialog
 
 Open it from the **Credentials** link in the top navigation bar, or from the

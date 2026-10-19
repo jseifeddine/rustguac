@@ -237,7 +237,9 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `wol_wait_time` | integer | SSH, RDP, VNC | Seconds to wait for the host to boot before connecting (at most 600) |
 | `owner` | string | All | Create the session on behalf of this user (their login email). Admin callers only, see [Creating a session for someone else](#creating-a-session-for-someone-else) |
 
-**Sessions created by non-admin users.** A request from a poweruser is held to a stricter policy than a connection entry or an admin; the same policy applies to the ad-hoc mode of `GET /api/connect`:
+`POST /api/sessions` takes literal values only: it does not resolve [credential variables](credential-variables.md). To connect with them, use [`POST /api/addressbook/adhoc/connect`](#post-apiaddressbookadhocconnect).
+
+**Sessions created by non-admin users.** A request from a poweruser is held to a stricter policy than a connection entry or an admin; the same policy applies to the ad-hoc mode of `GET /api/connect` and to `POST /api/addressbook/adhoc/connect`:
 
 - Every target is checked against the network allowlists, including the first jump host and the Proxmox VE API and SPICE proxy (see [Network allowlists](security.md#network-allowlists-ssrf-protection)).
 - Fields that only a connection entry may set are ignored: `address_book_entry`, `address_book_folder`, `entry_display_name`, `max_recordings`, `record_typescript`, `container_username`, `container_password`, `kerberos_cache`, `allow_sharing` and the Wake-on-LAN fields (`wol_*`). A VDI session always uses the caller's own container.
@@ -539,6 +541,38 @@ Optional body to override or supply credentials at connect time:
 ```
 
 Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the Vault entry and cannot be overridden at connect time.
+
+### `POST /api/addressbook/adhoc/connect`
+
+Connect to a host that is not a saved entry (an ad-hoc connection), described with every option an entry has. This is what **Connect to a host** (beside the search box on every page) sends. Requires **poweruser** role or higher. Works without Vault, and shares the session-creation rate limit with `POST /api/sessions`.
+
+```json
+{
+  "entry": {
+    "type": "ssh",
+    "hostname": "10.0.0.5",
+    "username": "deploy",
+    "private_key": "$my_ssh_key",
+    "ssh_font_size": 14,
+    "jump_hosts": [{ "hostname": "bastion.example.com", "port": 22, "username": "jump" }]
+  },
+  "generate_keypair": false,
+  "width": 1920,
+  "height": 1080,
+  "screen_width": 2560,
+  "screen_height": 1440,
+  "dpi": 96
+}
+```
+
+- `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
+- `generate_keypair` (SSH): generate an ephemeral Ed25519 keypair, as with `POST /api/sessions`.
+- `width`, `height`, `screen_width`, `screen_height`, `dpi`: as for the entry connect endpoint above.
+- [Credential variables](credential-variables.md) (`$name` in `username`, `password`, `domain`, `private_key`) are resolved from the **caller's own** My Credentials, server side; values are never returned. A variable the caller has not set returns `412` with `{"error": "missing credential variables", "missing_variables": ["name"]}`. An API key has no credential variables, so a request from one that uses them returns `400`. Without Vault, references are not resolved.
+- [Folder default credentials](credential-variables.md#folder-default-credentials) never apply: an ad-hoc connection belongs to no folder.
+- Requests from non-admins get the [ad-hoc policy](#post-apisessions) (network allowlists on every target, including SPICE, Proxmox and jump hosts; entry-only options ignored; site recording, drive and VDI limits).
+
+The response is the same as `POST /api/sessions` (`201`).
 
 ### `POST /api/addressbook/folders` (admin)
 

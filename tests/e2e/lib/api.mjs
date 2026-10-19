@@ -182,6 +182,13 @@ export async function installApi(page, options = {}) {
                 session_id: id, client_url: `/client.html?session=${id}`, ws_url: `/ws/${id}`, session_type: 'rdp'
             }));
         }
+        if (path === '/api/addressbook/adhoc/connect' && method === 'POST') {
+            const id = '44444444-4444-4444-8444-444444444444';
+            return route.fulfill(json({
+                session_id: id, client_url: `/client.html?session=${id}`, ws_url: `/ws/${id}`,
+                session_type: body?.entry?.type ?? 'ssh'
+            }, 201));
+        }
         if (path.startsWith('/api/addressbook/') && method !== 'GET') {
             state.version += 1;
             return route.fulfill(json({ ok: true }));

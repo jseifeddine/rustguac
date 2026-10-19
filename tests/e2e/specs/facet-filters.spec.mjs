@@ -19,9 +19,9 @@ test('sessions: the Type facet narrows the list and the count follows', async ({
     await settle(page);
     const rows = page.locator('#session-list tr');
     await expect(rows).toHaveCount(2);
-    // Every list page shares the toolbar: search box, facets, action on the right.
+    // Every list page shares the toolbar: search box and facets. Sessions has
+    // no action of its own since ad-hoc moved to the global button (#295).
     await expect(page.locator('#sessions .list-tools .list-search')).toBeVisible();
-    await expect(page.locator('#sessions .list-tools #new-session-btn')).toBeVisible();
 
     const menu = await openFacet(page, '#session-filters', 'Type');
     const ssh = menu.locator('.rg-facet-opt').filter({ hasText: /ssh/i }).first();

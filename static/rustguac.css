@@ -1002,7 +1002,6 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
 
 /* ── Modal extras ─────────────────────────────────────── */
 .modal .modal-hint { color: var(--text-muted); font-size: var(--fz-sm); margin: 0 0 var(--s-3); }
-.modal.adhoc-modal { min-width: 520px; max-width: 640px; }
 
 /* ── Global connection search (search.js) and the results overlay ──
    Shared by every page and by the connections folder view, so the markup
@@ -1039,8 +1038,27 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
     pointer-events: none;
 }
 .global-search:focus-within .global-search-key, .global-search.has-value .global-search-key { display: none; }
+/* "Connect to a host" (search.js, poweruser and up): beside the centred box
+   on wide screens, after it in the row on narrow ones. */
+.global-adhoc {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    left: calc(50% + max(min(640px, 42vw), 320px) / 2 + var(--s-3));
+    height: 48px; white-space: nowrap;
+}
 @media (max-width: 1180px) {
-    .global-search { position: static; transform: none; margin-left: auto; width: 360px; min-width: 0; }
+    /* Relative, so the icon and key hint stay on the box rather than on
+       whatever follows it in the row. */
+    .global-search { position: relative; left: auto; top: auto; transform: none; margin-left: auto; width: 360px; min-width: 0; }
+    .global-adhoc { position: static; transform: none; height: var(--ctl-sm); }
+}
+/* Phones: a 16px gutter, and the box takes a row of its own under the logo
+   and the button. */
+@media (max-width: 640px) {
+    body { padding-left: 16px; padding-right: 16px; }
+    .brand-row:has(.global-search), .brand-row:has(.global-adhoc) { flex-wrap: wrap; row-gap: var(--s-2); }
+    .global-search { order: 3; width: 100%; margin-left: 0; }
+    .global-search input[type="search"] { height: 40px; }
+    .global-adhoc { margin-left: auto; }
 }
 #search-overlay {
     display: none;

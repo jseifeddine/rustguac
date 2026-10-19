@@ -1,35 +1,24 @@
-// The ad-hoc session form lives in a modal opened from the button on the
-// Sessions heading; Cancel and Connect share a height.
+// Ad-hoc connections moved out of Sessions (#295): the old form and its
+// button are gone, and the global "Connect to a host" button beside the
+// search box takes a poweruser from here to the ad-hoc editor on
+// Connections.
 import { test, expect } from '@playwright/test';
 import { installApi, settle } from '../lib/api.mjs';
 
-test('the ad-hoc form opens as a modal and Cancel closes it', async ({ page }) => {
+test('Sessions has no ad-hoc form; the global button opens the editor on Connections', async ({ page }) => {
     await installApi(page, { role: 'poweruser' });
     await page.goto('/sessions.html');
     await settle(page);
-    const modal = page.locator('#adhoc-modal');
-    await expect(modal).not.toHaveClass(/active/);
-    const btn = page.locator('#new-session-btn');
-    await expect(btn).toBeVisible();
-    await btn.click();
-    await expect(modal).toHaveClass(/active/);
-    await expect(modal).toHaveAttribute('role', 'dialog');
-    await expect(page.locator('#adhoc-modal-title')).toBeVisible();
-    await expect(page.locator('#session-form')).toBeVisible();
+    await expect(page.locator('#adhoc-modal')).toHaveCount(0);
+    await expect(page.locator('#session-form')).toHaveCount(0);
+    await expect(page.locator('#new-session-btn')).toHaveCount(0);
 
-    const [ok, cancel] = await Promise.all([
-        page.locator('#connect-btn').boundingBox(),
-        page.locator('#adhoc-cancel').boundingBox()
-    ]);
-    expect(Math.abs(ok.height - cancel.height), 'Connect and Cancel must be the same height').toBeLessThanOrEqual(1);
-
-    await page.locator('#adhoc-cancel').click();
-    await expect(modal).not.toHaveClass(/active/);
-});
-
-test('a viewer gets no ad-hoc button', async ({ page }) => {
-    await installApi(page, { role: 'viewer' });
-    await page.goto('/sessions.html');
+    await page.locator('#rg-adhoc').click();
+    await page.waitForURL(/\/connections\.html/);
     await settle(page);
-    await expect(page.locator('#new-session-btn')).toBeHidden();
+    const modal = page.locator('#entry-modal');
+    await expect(modal).toHaveClass(/active/);
+    await expect(modal).toHaveClass(/adhoc/);
+    await expect(page.locator('#em-connect')).toBeVisible();
+    expect(new URL(page.url()).hash).toBe('');
 });

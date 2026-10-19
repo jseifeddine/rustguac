@@ -262,7 +262,7 @@ Two things to watch:
 
 ## Vault / OpenBao Connections
 
-The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it rustguac falls back to ad-hoc-only sessions via the Sessions page.
+The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it rustguac falls back to ad-hoc connections only, through **Connect to a host** (beside the search box on every page).
 
 ### Quickstart script
 
@@ -617,9 +617,9 @@ Admins configure jump hosts per entry in the connections editor. Click "Add Jump
 
 Jump host credentials are stored in Vault alongside the entry's other credentials and are never sent to the browser. When editing an entry, existing hop passwords and keys are preserved if the edit form omits them (per-hop credential merge by index).
 
-#### Ad-hoc sessions
+#### Ad-hoc connections
 
-Powerusers can add jump hosts when creating sessions from the Sessions page. The same multi-hop card UI is available — click "Add Jump Host" in the SSH Tunnel section.
+Powerusers can add jump hosts to an ad-hoc connection (**Connect to a host** (beside the search box on every page)), which uses the same entry editor: click "Add Jump Host" in the SSH Tunnel section. For non-admins the first jump host must be inside `ssh_allowed_networks`.
 
 ### Per-hop credentials
 

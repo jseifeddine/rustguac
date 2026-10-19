@@ -6,7 +6,7 @@ rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp.
 
 rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and Vault-backed connection storage.
 
-The connections feature (the main user-facing UI) requires HashiCorp Vault or OpenBao for credential storage. Without one, rustguac falls back to ad-hoc-only sessions created via the API. See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for setup, including the `contrib/vault-quickstart.sh` helper.
+The connections feature (the main user-facing UI) requires HashiCorp Vault or OpenBao for credential storage. Without one, rustguac falls back to ad-hoc connections only (**Connect to a host** beside the search box, or the API). See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for setup, including the `contrib/vault-quickstart.sh` helper.
 
 ## Why not Apache Guacamole?
 
@@ -135,7 +135,7 @@ You -> bastion-1:22 -> bastion-2:22 -> target:3389 RDP
 
 Jump hosts can be configured:
 - **Per connections entry** — admins configure the tunnel chain in the entry editor
-- **Per ad-hoc session** — powerusers add jump hosts when creating sessions from the Sessions page
+- **Per ad-hoc connection** — powerusers add jump hosts in **Connect to a host** (beside the search box on every page)
 
 Each hop supports independent credentials (username + password or private key). Jump host credentials are stored in Vault alongside the connections entry and are never sent to the browser.
 

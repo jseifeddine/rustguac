@@ -76,13 +76,15 @@ SSH and VNC connections are made to the address that was checked rather than to 
 
 ### Ad-hoc sessions from non-admins
 
-A session a poweruser creates from their own request (`POST /api/sessions`, or `GET /api/connect` without an entry) is not a connection entry, so it gets none of an entry's trust. Besides the allowlist checks above:
+A session a poweruser creates from their own request (**Connect to a host** (beside the search box on every page), `POST /api/addressbook/adhoc/connect`, `POST /api/sessions`, or `GET /api/connect` without an entry) is not a connection entry, so it gets none of an entry's trust. Besides the allowlist checks above, which cover every target the entry editor can name, SPICE, Proxmox VE and jump hosts included:
 
 - Settings an admin makes on an entry are ignored when a poweruser sends them: recording attribution and rotation (`address_book_entry`, `max_recordings`), typescript recording, sharing, Wake-on-LAN, a Kerberos credential cache path on the rustguac host, and a fixed VDI account (`container_username` / `container_password`). A VDI session always runs in the caller's own container, with the caller's own home directory.
 - Site-wide recording cannot be switched off for the session, and a drive disabled in `[drive]` cannot be switched on.
 - VDI CPU, memory and idle timeout are capped at the `[vdi]` defaults.
 
 Admins (an admin API key included) and connection entries are trusted to set all of these.
+
+An ad-hoc connection may use [credential variables](credential-variables.md), but only the caller's own: they are resolved server side from the caller's My Credentials, and the values are never sent to the browser. [Folder default credentials](credential-variables.md#folder-default-credentials) never apply to one, since they belong to a folder and an ad-hoc connection has none.
 
 ## Authentication
 
@@ -319,7 +321,7 @@ trusted_proxies = ["127.0.0.1/32"]
 ## Credential handling
 
 - **Vault credentials** — connections entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
-- **SSH tunnel credentials** — jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
+- **SSH tunnel credentials** — jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc connections, jump host credentials are provided in the request and exist only in memory during tunnel setup.
 - **API keys** — only the SHA-256 hash is stored. The plaintext key is shown once at creation and cannot be retrieved.
 - **User API tokens** — same SHA-256 hash storage as admin API keys. The `rgu_` prefix enables secret scanning. Plaintext shown once at creation only.
 - **OIDC client secret** — can be provided via `OIDC_CLIENT_SECRET` environment variable instead of the config file.
