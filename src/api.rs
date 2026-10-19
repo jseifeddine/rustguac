@@ -3351,6 +3351,9 @@ pub fn ab_changes_for_request(
         }
         // POST .../entries/{entry}/connect starts a session, changes nothing.
         (Some("folders"), Some(_), Some(_), Some("entries"), Some(_), Some("connect")) => None,
+        // POST /adhoc/connect starts an ad-hoc session from the editor; it
+        // changes nothing in the address book either.
+        (Some("adhoc"), Some("connect"), None, ..) => None,
         // POST .../entries/{entry}/move|copy: the target is in the body.
         (Some("folders"), Some(scope), Some(folder), Some("entries"), Some(_), Some(_)) => {
             Some((vec![AbChange::entries(scope, folder)], false))
@@ -8268,6 +8271,16 @@ mod tests {
             f(&Method::DELETE, "/api/addressbook/folders/shared/x"),
             Some((vec![AbChange::tree("shared", "x")], true))
         );
+        // connecting changes nothing, from an entry or ad hoc; an ad-hoc
+        // connect marked as a change made every open tab reload
+        assert_eq!(
+            f(
+                &Method::POST,
+                "/api/addressbook/folders/shared/x/entries/y/connect"
+            ),
+            None
+        );
+        assert_eq!(f(&Method::POST, "/api/addressbook/adhoc/connect"), None);
         // folder defaults reach subfolders too: everything is refreshed
         assert_eq!(
             f(
