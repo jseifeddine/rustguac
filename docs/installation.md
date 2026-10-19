@@ -141,14 +141,17 @@ Pre-built images are available on [Docker Hub](https://hub.docker.com/r/sol1/rus
 
 ```bash
 docker pull sol1/rustguac:latest
-docker run -d -p 8089:8089 sol1/rustguac:latest
+docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chromium.json > seccomp-chromium.json
+docker run -d -p 8089:8089 --security-opt seccomp=seccomp-chromium.json sol1/rustguac:latest
 ```
+
+The seccomp profile lets Chromium's sandbox start, which web browser sessions need. Docker's default profile blocks the namespaces the sandbox uses, so without it every web session fails; SSH, RDP and VNC sessions work either way. The profile is Docker's default with only that change. See [Web sessions: Running under Docker](web-sessions.md#running-under-docker) for what it allows and the alternatives.
 
 To build from source instead:
 
 ```bash
 docker build -t rustguac .
-docker run -d -p 8089:8089 rustguac
+docker run -d -p 8089:8089 --security-opt seccomp=contrib/docker/seccomp-chromium.json rustguac
 ```
 
 The Docker image:
@@ -157,6 +160,8 @@ The Docker image:
 - Generates a self-signed TLS certificate at build time
 - Enables TLS between rustguac and guacd by default
 - Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
+- Runs as the unprivileged `rustguac` user, with Chromium's sandbox enabled
+- Includes the seccomp profile for web sessions at `/opt/rustguac/seccomp-chromium.json`
 
 ### API key setup
 
@@ -202,6 +207,9 @@ services:
     image: sol1/rustguac:latest
     ports:
       - "8089:8089"
+    security_opt:
+      # Lets Chromium's sandbox start for web sessions (see Option C above)
+      - seccomp=./seccomp-chromium.json
     volumes:
       - ./config.toml:/opt/rustguac/config.toml
       - rustguac-data:/opt/rustguac/data

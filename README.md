@@ -116,13 +116,17 @@ sudo systemctl enable --now rustguac
 
 ```bash
 docker pull sol1/rustguac:latest
-docker run -d -p 8089:8089 sol1/rustguac:latest
+docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chromium.json > seccomp-chromium.json
+docker run -d -p 8089:8089 --security-opt seccomp=seccomp-chromium.json sol1/rustguac:latest
 ```
+
+The seccomp profile lets Chromium's sandbox start for web browser sessions; see [Web sessions: Running under Docker](docs/web-sessions.md#running-under-docker).
 
 For VDI support, mount the Docker socket:
 
 ```bash
 docker run -d -p 8089:8089 \
+  --security-opt seccomp=seccomp-chromium.json \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add $(getent group docker | cut -d: -f3) \
   sol1/rustguac:latest
