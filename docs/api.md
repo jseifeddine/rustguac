@@ -139,11 +139,11 @@ The response includes the public key in the `banner_text` field. The SSH connect
 ```json
 {
   "session_type": "web",
-  "url": "https://www.saucedemo.com",
-  "username": "standard_user",
-  "password": "secret_sauce",
-  "autofill": "[{\"url\":\"https://www.saucedemo.com\",\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}]",
-  "allowed_domains": ["saucedemo.com"],
+  "url": "https://app.example.com",
+  "username": "demo-user",
+  "password": "demo-pass",
+  "autofill": "[{\"url\":\"https://app.example.com\",\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}]",
+  "allowed_domains": ["app.example.com"],
   "disable_copy": true
 }
 ```
@@ -167,7 +167,7 @@ The `autofill` field is a JSON string containing an array of objects with `url`,
       "password": "jump-pass"
     },
     {
-      "hostname": "internal-gw.corp.local",
+      "hostname": "internal-gw.example.internal",
       "port": 22,
       "username": "gw-user",
       "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
@@ -181,7 +181,7 @@ The `autofill` field is a JSON string containing an array of objects with `url`,
 ```json
 {
   "session_type": "web",
-  "url": "https://internal-app.corp.local:8443/dashboard",
+  "url": "https://internal-app.example.internal:8443/dashboard",
   "jump_hosts": [
     {
       "hostname": "bastion.example.com",
@@ -636,7 +636,7 @@ Update a connection entry, or create it if there is none of that name in the fol
 2. Otherwise every entry in the scope is read, and the one carrying that `external_id` is moved to `:folder/:entry` by the server-side move below, credentials and credential variables included, and the update is then applied on top. The response says where it came from:
 
    ```json
-   { "ok": true, "moved_from": { "folder": "mrgelato", "name": "fw01" } }
+   { "ok": true, "moved_from": { "folder": "customer-a", "name": "fw01" } }
    ```
 
 3. If no entry carries it, the entry is created.

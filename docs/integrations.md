@@ -237,8 +237,8 @@ If rustguac has to reach your identity provider through an outbound HTTP proxy (
 ```bash
 # For systemd (same env file as the client secret above)
 cat >> /opt/rustguac/env <<'EOF'
-HTTPS_PROXY=http://squid.internal:3128
-HTTP_PROXY=http://squid.internal:3128
+HTTPS_PROXY=http://squid.example.internal:3128
+HTTP_PROXY=http://squid.example.internal:3128
 NO_PROXY=127.0.0.1,localhost,.internal
 EOF
 systemctl restart rustguac
