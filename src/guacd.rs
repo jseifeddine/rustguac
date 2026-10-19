@@ -147,6 +147,71 @@ pub struct SpiceParams {
     pub secondary_monitors: u32,
 }
 
+impl SpiceParams {
+    /// The port guacd dials: the TLS port with TLS on (falling back to `port`
+    /// when no separate TLS port is set), otherwise `port`.
+    pub fn dial_port(&self) -> u16 {
+        if self.tls {
+            self.tls_port.unwrap_or(self.port)
+        } else {
+            self.port
+        }
+    }
+}
+
+/// Resolve a guacd SPICE connect arg name to its value.
+///
+/// SPICE has no width/height/dpi connect args: it sizes via the `size`
+/// instruction.
+fn spice_arg_value(name: &str, p: &SpiceParams) -> String {
+    match name {
+        "hostname" => p.hostname.clone(),
+        // TLS SPICE (e.g. Proxmox) is TLS-only: send an empty plain
+        // port so guacd/spice-gtk connects via tls-port with TLS rather
+        // than plaintext against a TLS endpoint.
+        "port" => {
+            if p.tls {
+                String::new()
+            } else {
+                p.port.to_string()
+            }
+        }
+        // Credentials go in the connect args (not a post-connect argv
+        // stream): guacd's SPICE client sets settings->password on the
+        // session and authenticates during connect without awaiting
+        // argv, so argv delivery races the auth. The connect arg is set
+        // before the server connection is opened.
+        "username" => p.username.clone().unwrap_or_default(),
+        "password" => p.password.clone().unwrap_or_default(),
+        "tls" => if p.tls { "true" } else { "false" }.into(),
+        // With TLS on, always name the port to dial: a blank TLS port means
+        // "same as Port" (as in the editor and the jump-host tunnel), and an
+        // empty value would make guacd fall back to 5900.
+        "tls-port" => {
+            if p.tls {
+                p.dial_port().to_string()
+            } else {
+                p.tls_port.map(|x| x.to_string()).unwrap_or_default()
+            }
+        }
+        "ca-cert" => p.ca_cert.clone().unwrap_or_default(),
+        "cert-subject" => p.cert_subject.clone().unwrap_or_default(),
+        "ignore-cert" => if p.ignore_cert { "true" } else { "false" }.into(),
+        "proxy" => p.proxy.clone().unwrap_or_default(),
+        "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
+        "read-only" => "false".into(),
+        "swap-red-blue" => "false".into(),
+        "enable-audio" => if p.enable_audio { "true" } else { "false" }.into(),
+        "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+        "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
+        "secondary-monitors" => p.secondary_monitors.to_string(),
+        _ => {
+            tracing::debug!("Unknown guacd SPICE parameter '{}', sending empty", name);
+            String::new()
+        }
+    }
+}
+
 /// RDP connection parameters to pass to guacd.
 pub struct RdpParams {
     pub hostname: String,
@@ -408,45 +473,7 @@ pub async fn connect_and_handshake(
                     String::new()
                 }),
             },
-            // Note: SPICE has no width/height/dpi connect args (it sizes via the
-            // `size` instruction) and no `password` arg (delivered via argv below).
-            ConnectionParams::Spice(p) => match name.as_str() {
-                "hostname" => p.hostname.clone(),
-                // TLS SPICE (e.g. Proxmox) is TLS-only: send an empty plain
-                // port so guacd/spice-gtk connects via tls-port with TLS rather
-                // than plaintext against a TLS endpoint.
-                "port" => {
-                    if p.tls {
-                        String::new()
-                    } else {
-                        p.port.to_string()
-                    }
-                }
-                // Credentials go in the connect args (not a post-connect argv
-                // stream): guacd's SPICE client sets settings->password on the
-                // session and authenticates during connect without awaiting
-                // argv, so argv delivery races the auth. The connect arg is set
-                // before the server connection is opened.
-                "username" => p.username.clone().unwrap_or_default(),
-                "password" => p.password.clone().unwrap_or_default(),
-                "tls" => if p.tls { "true" } else { "false" }.into(),
-                "tls-port" => p.tls_port.map(|x| x.to_string()).unwrap_or_default(),
-                "ca-cert" => p.ca_cert.clone().unwrap_or_default(),
-                "cert-subject" => p.cert_subject.clone().unwrap_or_default(),
-                "ignore-cert" => if p.ignore_cert { "true" } else { "false" }.into(),
-                "proxy" => p.proxy.clone().unwrap_or_default(),
-                "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
-                "read-only" => "false".into(),
-                "swap-red-blue" => "false".into(),
-                "enable-audio" => if p.enable_audio { "true" } else { "false" }.into(),
-                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
-                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
-                "secondary-monitors" => p.secondary_monitors.to_string(),
-                _ => {
-                    tracing::debug!("Unknown guacd SPICE parameter '{}', sending empty", name);
-                    String::new()
-                }
-            },
+            ConnectionParams::Spice(p) => spice_arg_value(name, p),
         })
         .collect();
 
@@ -717,5 +744,53 @@ mod tests {
     fn join_args_read_only() {
         let got = join_arg_values(&names(&["hostname", "read-only", "port"]), true);
         assert_eq!(got, vec!["", "true", ""]);
+    }
+
+    fn spice(tls: bool, port: u16, tls_port: Option<u16>) -> SpiceParams {
+        SpiceParams {
+            hostname: "spice.example.com".into(),
+            port,
+            password: None,
+            username: None,
+            tls,
+            tls_port,
+            ca_cert: None,
+            cert_subject: None,
+            ignore_cert: false,
+            proxy: None,
+            color_depth: None,
+            width: 1024,
+            height: 768,
+            dpi: 96,
+            disable_copy: false,
+            disable_paste: false,
+            enable_audio: false,
+            secondary_monitors: 0,
+        }
+    }
+
+    #[test]
+    fn spice_tls_blank_tls_port_uses_port() {
+        let p = spice(true, 61000, None);
+        assert_eq!(p.dial_port(), 61000);
+        assert_eq!(spice_arg_value("port", &p), "");
+        assert_eq!(spice_arg_value("tls-port", &p), "61000");
+    }
+
+    #[test]
+    fn spice_tls_explicit_tls_port_wins() {
+        let p = spice(true, 5900, Some(5901));
+        assert_eq!(p.dial_port(), 5901);
+        assert_eq!(spice_arg_value("port", &p), "");
+        assert_eq!(spice_arg_value("tls-port", &p), "5901");
+    }
+
+    #[test]
+    fn spice_plain_sends_port_only() {
+        let p = spice(false, 5930, None);
+        assert_eq!(p.dial_port(), 5930);
+        assert_eq!(spice_arg_value("port", &p), "5930");
+        assert_eq!(spice_arg_value("tls-port", &p), "");
+        assert_eq!(spice_arg_value("tls", &p), "false");
     }
 }
