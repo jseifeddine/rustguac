@@ -368,11 +368,15 @@ impl BrowserManager {
             Ok(Some(status)) => {
                 // Chromium exited already — capture stderr for diagnostics
                 let mut stderr_msg = String::new();
+                let mut sandbox_hint = None;
                 if let Some(mut stderr) = chromium_child.stderr.take() {
                     use tokio::io::AsyncReadExt;
                     let mut buf = Vec::new();
                     let _ = stderr.read_to_end(&mut buf).await;
                     stderr_msg = String::from_utf8_lossy(&buf).to_string();
+                    // Classify before truncating: the sandbox messages come first
+                    // today, but nothing guarantees that.
+                    sandbox_hint = sandbox_failure_hint(&stderr_msg);
                     // Trim to a reasonable length for logging
                     if stderr_msg.len() > 2000 {
                         stderr_msg.truncate(2000);
@@ -386,8 +390,11 @@ impl BrowserManager {
                 }
                 let _ = std::fs::remove_dir_all(&profile_dir);
                 let msg = format!(
-                    "Chromium exited immediately ({}). stderr: {}",
+                    "Chromium exited immediately ({}).{} stderr: {}",
                     status,
+                    sandbox_hint
+                        .map(|hint| format!(" {}", hint))
+                        .unwrap_or_default(),
                     if stderr_msg.is_empty() {
                         "(empty)".to_string()
                     } else {
@@ -771,6 +778,42 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Where to read about getting Chromium's sandbox to start.
+const SANDBOX_DOCS: &str =
+    "https://github.com/sol1/rustguac/blob/main/docs/web-sessions.md#chromium-sandbox";
+
+/// Recognise Chromium's start-up messages for a sandbox it could not create
+/// and return the likely cause and the fix. Chromium prefers its namespace
+/// sandbox (user, PID and network namespaces) and falls back to the SUID
+/// `chrome-sandbox` helper only when it cannot create them, so most of these
+/// failures come down to namespaces being refused, e.g. by Docker's default
+/// seccomp profile.
+fn sandbox_failure_hint(stderr: &str) -> Option<String> {
+    let cause = if stderr
+        .contains("SUID sandbox helper binary was found, but is not configured correctly")
+    {
+        "user namespaces are not available and the chrome-sandbox helper is not \
+         owned by root with mode 4755"
+    } else if stderr.contains("The setuid sandbox is not running as root") {
+        "user namespaces are not available and no_new_privs (e.g. Docker's \
+         no-new-privileges) stops the SUID chrome-sandbox helper from running as root. \
+         Under Docker, use the seccomp profile from contrib/docker/seccomp-chromium.json"
+    } else if stderr.contains("Failed to move to new namespace") {
+        "creating user, PID or network namespaces was refused. Under Docker, run the \
+         container with the seccomp profile from contrib/docker/seccomp-chromium.json \
+         (Docker's default profile blocks these namespaces)"
+    } else if stderr.contains("No usable sandbox!") {
+        "user namespaces are not available and the chrome-sandbox helper is missing. \
+         Allow unprivileged user namespaces or install the chromium-sandbox package"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "Chromium's sandbox could not start: {}. See {}.",
+        cause, SANDBOX_DOCS
+    ))
+}
+
 /// Read whatever stderr is available from a child process (non-blocking, best-effort).
 async fn collect_stderr(child: &mut Child) -> String {
     use tokio::io::AsyncReadExt;
@@ -897,6 +940,49 @@ mod tests {
         assert_eq!(count, 2);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sandbox_failure_hint() {
+        // Docker's default seccomp profile (namespaces refused, SUID helper present)
+        let seccomp = "Failed to move to new namespace: PID namespaces supported, \
+            Network namespace supported, but failed: errno = Operation not permitted\n\
+            [36:36:1019/073350.639571:FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:228] \
+            Zygote process exited prematurely with exit code 1\n";
+        let hint = sandbox_failure_hint(seccomp).unwrap();
+        assert!(hint.contains("namespaces was refused"));
+        assert!(hint.contains("contrib/docker/seccomp-chromium.json"));
+        assert!(hint.contains(SANDBOX_DOCS));
+
+        // no-new-privileges: the helper also prints the namespace failure,
+        // but the no_new_privs cause is the more specific one
+        let nnp = "The setuid sandbox is not running as root. Common causes:\n  \
+            * An unprivileged process using ptrace on it, like a debugger.\n  \
+            * A parent process set prctl(PR_SET_NO_NEW_PRIVS, ...)\n\
+            Failed to move to new namespace: PID namespaces supported, \
+            Network namespace supported, but failed: errno = Operation not permitted\n";
+        assert!(sandbox_failure_hint(nnp).unwrap().contains("no_new_privs"));
+
+        let not_suid = "[67:67:1019/073549.164763:FATAL:sandbox/linux/suid/client/setuid_sandbox_host.cc:172] \
+            The SUID sandbox helper binary was found, but is not configured correctly. \
+            Rather than run without sandboxing I'm aborting now.";
+        assert!(sandbox_failure_hint(not_suid)
+            .unwrap()
+            .contains("mode 4755"));
+
+        let no_helper = "[97:97:1019/073549.849831:ERROR:content/browser/zygote_host/zygote_host_impl_linux.cc:130] \
+            No usable sandbox! If this is a Debian system, please install the \
+            chromium-sandbox package to solve this problem.";
+        assert!(sandbox_failure_hint(no_helper)
+            .unwrap()
+            .contains("chromium-sandbox package"));
+
+        // Unrelated start-up failures get no hint
+        assert!(sandbox_failure_hint("").is_none());
+        assert!(sandbox_failure_hint(
+            "error while loading shared libraries: libnss3.so: cannot open shared object file"
+        )
+        .is_none());
     }
 
     #[test]
