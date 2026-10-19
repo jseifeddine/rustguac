@@ -1,0 +1,45 @@
+# rustguac configuration for the screenshot environment. Paths match the
+# official image; everything else is left at its default so the screenshots
+# show what a new install shows.
+listen_addr = "0.0.0.0:8089"
+guacd_addr = "127.0.0.1:4822"
+static_path = "/opt/rustguac/static"
+db_path = "/opt/rustguac/data/rustguac.db"
+xvnc_path = "Xvnc"
+chromium_path = "chromium"
+display_range_start = 100
+display_range_end = 199
+
+# The demo targets live on the compose network, whose subnet Docker picks
+# from the private ranges.
+ssh_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+web_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+# Drop finished sessions from the Sessions page quickly (default 300), so it
+# shows the live ones. Their history stays in Reports.
+session_cleanup_delay_secs = 5
+
+[tls]
+cert_path = "/opt/rustguac/tls/cert.pem"
+key_path = "/opt/rustguac/tls/key.pem"
+guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+
+[recording]
+path = "/opt/rustguac/recordings"
+
+[drive]
+enabled = true
+drive_path = "/opt/rustguac/drives"
+
+[vault]
+addr = "http://openbao:8200"
+mount = "secret"
+base_path = "rustguac"
+role_id = "screenshots-role"
+# The secret ID comes from VAULT_SECRET_ID in compose.yaml.
+
+[oidc]
+issuer_url = "http://oidc:8080/default"
+client_id = "rustguac"
+client_secret = "screenshots"
+redirect_uri = "https://rustguac:8089/auth/callback"

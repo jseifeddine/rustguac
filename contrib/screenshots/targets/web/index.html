@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Service status</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f4f6fa; color: #1c2533; }
+  header { display: flex; justify-content: space-between; align-items: center;
+           padding: 18px 32px; background: #1f3a5f; color: #fff; }
+  header h1 { margin: 0; font-size: 20px; }
+  header span { font-size: 14px; opacity: .85; }
+  main { max-width: 980px; margin: 28px auto; }
+  .banner { padding: 14px 18px; border: 1px solid #9ad6b0; border-radius: 6px;
+            background: #e6f5ec; color: #17633a; font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 22px 0; }
+  .card { background: #fff; border: 1px solid #dde3ec; border-radius: 6px; padding: 16px; }
+  .card b { display: block; font-size: 28px; }
+  .card small { color: #5b6678; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #edf0f5; font-size: 14px; }
+  th { color: #5b6678; background: #f8fafc; }
+  .ok { color: #17803d; font-weight: 600; }
+  .warn { color: #b45309; font-weight: 600; }
+  .bars span { display: inline-block; width: 6px; height: 18px; margin-right: 2px;
+               border-radius: 1px; background: #2fbf71; vertical-align: middle; }
+  .bars span.d { background: #f0a92e; }
+</style>
+</head>
+<body>
+<header><h1>Example Corp &middot; Service status</h1><span>status.example.internal</span></header>
+<main>
+  <div class="banner">All core systems operational</div>
+  <div class="cards">
+    <div class="card"><b>99.98%</b><small>Uptime, last 30 days</small></div>
+    <div class="card"><b>42 ms</b><small>Median API latency</small></div>
+    <div class="card"><b>0</b><small>Open incidents</small></div>
+  </div>
+  <table>
+    <thead><tr><th>Service</th><th>Host</th><th>Status</th><th>Last 30 days</th></tr></thead>
+    <tbody>
+      <tr><td>Customer portal</td><td>portal.example.com</td><td class="ok">Operational</td><td class="bars" data-dip=""></td></tr>
+      <tr><td>Public API</td><td>api.example.com</td><td class="ok">Operational</td><td class="bars" data-dip=""></td></tr>
+      <tr><td>Billing</td><td>billing.example.internal</td><td class="ok">Operational</td><td class="bars" data-dip="24"></td></tr>
+      <tr><td>Directory</td><td>dc-01.example.internal</td><td class="ok">Operational</td><td class="bars" data-dip=""></td></tr>
+      <tr><td>Backups</td><td>backup-01.example.internal</td><td class="warn">Degraded</td><td class="bars" data-dip="24"></td></tr>
+      <tr><td>Monitoring</td><td>monitor.example.internal</td><td class="ok">Operational</td><td class="bars" data-dip=""></td></tr>
+    </tbody>
+  </table>
+</main>
+<script>
+  document.querySelectorAll('.bars').forEach(function (cell) {
+    var dip = cell.getAttribute('data-dip');
+    for (var i = 0; i < 30; i++) {
+      var s = document.createElement('span');
+      if (String(i) === dip) s.className = 'd';
+      cell.appendChild(s);
+    }
+  });
+</script>
+</body>
+</html>
