@@ -45,8 +45,10 @@ This installs rustguac + guacd to `/opt/rustguac` with systemd services.
 
 ```bash
 docker pull sol1/rustguac:latest
+docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chromium.json > seccomp-chromium.json
 docker run -d \
   -p 443:8089 \
+  --security-opt seccomp=seccomp-chromium.json \
   -v rustguac-data:/opt/rustguac/data \
   -v rustguac-recordings:/opt/rustguac/recordings \
   -v ./config.toml:/opt/rustguac/config.toml \

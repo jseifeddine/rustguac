@@ -276,7 +276,9 @@ Each web session gets a unique Chromium profile directory (UUID-based path in `/
 
 ### Sandbox
 
-Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` helper). The `--no-sandbox` flag is not used.
+Chromium runs with its normal sandbox enabled. The `--no-sandbox` flag is not used. Chromium isolates its renderers in their own user, PID and network namespaces, and falls back to the SUID `chrome-sandbox` helper only where it cannot create them. If neither can start, Chromium refuses to run and the web session fails with an error that names the cause; it never runs unsandboxed.
+
+Under Docker, the default seccomp profile blocks these namespaces. Run the container with the narrow profile shipped in `contrib/docker/seccomp-chromium.json` rather than `seccomp=unconfined`; see [Web sessions: Running under Docker](web-sessions.md#running-under-docker).
 
 ## File permissions
 

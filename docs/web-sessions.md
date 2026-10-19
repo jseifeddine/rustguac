@@ -485,7 +485,55 @@ Key restrictions:
 - Dangerous URL schemes (`file://`, `chrome://`, `javascript:`) are blocked
 - Browser sign-in and sync are disabled
 - Each session gets a fresh UUID-based profile directory, deleted on session end
-- Chromium runs with its normal SUID sandbox (no `--no-sandbox`)
+- Chromium runs with its sandbox enabled (no `--no-sandbox`); see [Chromium sandbox](#chromium-sandbox)
+
+## Chromium sandbox
+
+Chromium runs with its sandbox enabled. rustguac adds `--no-sandbox` only when it runs as root, which neither the packages nor the Docker image do.
+
+Chromium sandboxes its renderers with Linux namespaces: each runs in its own user, PID and network namespace. If the kernel or the container runtime refuses to create those namespaces, Chromium falls back to the SUID `chrome-sandbox` helper from the `chromium-sandbox` package, which must be owned by root with mode 4755. If neither works, Chromium aborts at start-up rather than run unsandboxed, and creating the web session fails. rustguac then logs, and returns in the API error, a message that starts with `Chromium's sandbox could not start:` and names the cause, followed by Chromium's own output.
+
+### Running under Docker
+
+Docker's default seccomp profile only lets a container create namespaces if it has `CAP_SYS_ADMIN`. The rustguac image runs as an unprivileged user without that capability, so neither the namespace sandbox nor the SUID helper can start, and every web session fails with:
+
+```
+Chromium exited immediately (signal: 6 (SIGABRT)). Chromium's sandbox could not start: creating user, PID or network namespaces was refused. ...
+```
+
+SSH, RDP and VNC sessions are not affected.
+
+Run the container with the seccomp profile shipped with rustguac, [`contrib/docker/seccomp-chromium.json`](../contrib/docker/seccomp-chromium.json). It is Docker's default profile with one change: `clone` and `unshare` may create user, PID and network namespaces without `CAP_SYS_ADMIN`. Mount, UTS, IPC and cgroup namespaces are still refused, every other rule is unchanged, and the profile grants no capabilities. The image includes a copy that matches its version:
+
+```bash
+docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/seccomp-chromium.json > seccomp-chromium.json
+docker run -d -p 8089:8089 --security-opt seccomp=seccomp-chromium.json sol1/rustguac:latest
+```
+
+In Docker Compose:
+
+```yaml
+services:
+  rustguac:
+    image: sol1/rustguac:latest
+    security_opt:
+      - seccomp=./seccomp-chromium.json
+```
+
+Docker reads the file when the container is created, so after an upgrade, extract the profile from the new image again.
+
+The host kernel must also allow unprivileged user namespaces. If the host restricts them, for example with a sysctl or an AppArmor policy, the profile alone is not enough and web sessions keep failing with the same error.
+
+Other options, and why the profile is preferred:
+
+| Option | Effect |
+|--------|--------|
+| `--security-opt seccomp=seccomp-chromium.json` | Recommended. Allows only the three namespace types Chromium needs. |
+| `--security-opt seccomp=unconfined` | Also works, but turns off syscall filtering for every process in the container: rustguac, guacd, Xvnc and Chromium. Use it only where a custom profile cannot be used. |
+| `--cap-add SYS_ADMIN` | Also works, but grants mount and many other administrative operations. Not recommended. |
+| Running as root (`--no-sandbox`) | Disables Chromium's sandbox entirely. Not supported. |
+
+The profile also works with `--security-opt no-new-privileges`, because the namespace sandbox does not need the SUID helper.
 
 ## API reference
 
@@ -564,6 +612,10 @@ When creating entries via the Vault connections (UI or API), the same fields are
 - Check the `login_scripts_dir` config points to the right directory.
 - Check rustguac logs for `[login-script]` messages — script stdout/stderr is captured.
 - The script has a timeout (default 120s). Increase `login_script_timeout_secs` if needed.
+
+**Web session fails with "Chromium's sandbox could not start":**
+- Chromium could not create its sandbox and refused to run without it. The message names the cause. Under Docker, run the container with the seccomp profile described in [Running under Docker](#running-under-docker).
+- On a host install, make sure unprivileged user namespaces are allowed, or that `/usr/lib/chromium/chrome-sandbox` (from the `chromium-sandbox` package) is owned by root with mode 4755.
 
 **Browser shows a blank white screen:**
 - The Xvnc display may not be ready. Check logs for Xvnc startup errors.
