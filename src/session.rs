@@ -1383,7 +1383,7 @@ impl SessionManager {
                     username: req.username.clone(),
                     tls: req.spice_tls.unwrap_or(false),
                     tls_port: req.spice_tls_port,
-                    ca_cert: req.spice_ca_cert.clone(),
+                    ca_cert: checked_spice_ca(req.spice_ca_cert.clone())?,
                     cert_subject: req.spice_cert_subject.clone(),
                     ignore_cert: req.ignore_cert.unwrap_or(false),
                     proxy: req.spice_proxy.clone(),
@@ -1553,7 +1553,11 @@ impl SessionManager {
                     username: req.username.clone(),
                     tls: true,
                     tls_port: Some(cfg.tls_port),
-                    ca_cert: if verify_tls { Some(cfg.ca_cert) } else { None },
+                    ca_cert: if verify_tls {
+                        checked_spice_ca(Some(cfg.ca_cert))?
+                    } else {
+                        None
+                    },
                     cert_subject: if verify_tls {
                         Some(cfg.host_subject)
                     } else {
@@ -2812,6 +2816,33 @@ fn drive_cleanup_settings(drive: &Option<DriveConfig>) -> (bool, u64) {
     }
 }
 
+/// A SPICE CA certificate on its way to guacd. guacd's SPICE plugin hands a
+/// PEM to spice-gtk to verify the server against, but if the PEM holds no
+/// certificate spice-gtk quietly falls back to the system trust store, so a
+/// corrupt CA would mean "trust every public CA" rather than "fail". Refuse
+/// the session instead. A value that isn't PEM (a file path) is left alone.
+fn checked_spice_ca(ca: Option<String>) -> Result<Option<String>, SessionError> {
+    let Some(ca) = ca.filter(|c| !c.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if ca.contains("-----BEGIN ") {
+        // Each block must parse as a real certificate, not just as base64:
+        // adding it to a root store does the full parse.
+        let mut store = rustls::RootCertStore::empty();
+        let readable = rustls_pemfile::certs(&mut ca.as_bytes())
+            .filter_map(Result::ok)
+            .filter(|der| store.add(der.clone()).is_ok())
+            .count();
+        if readable == 0 {
+            return Err(SessionError::ValidationError(
+                "the SPICE CA certificate could not be read, so the server cannot be verified"
+                    .into(),
+            ));
+        }
+    }
+    Ok(Some(ca))
+}
+
 /// A VDI container username: it becomes the container name suffix and a
 /// directory under `home_base`, so only a plain name is accepted. Letters,
 /// digits, '.', '_' and '-', at most 32 characters (the Linux limit), not
@@ -3097,6 +3128,26 @@ mod tests {
         assert!(!recording_enabled_for(req.enable_recording, &config));
         assert!(drive::is_drive_enabled(&config.drive, req.enable_drive));
         assert_eq!(req.container_cpu_limit, Some(64.0));
+    }
+
+    #[test]
+    fn a_corrupt_spice_ca_refuses_rather_than_trusting_public_cas() {
+        // A real self-signed test certificate (its key was never kept), so the
+        // good case parses for real.
+        let good = String::from("-----BEGIN CERTIFICATE-----\nMIIBmTCCAT+gAwIBAgIUAWvkjT5hkkeIilvXPANcuXWGz2cwCgYIKoZIzj0EAwIw\nITEfMB0GA1UEAwwWcnVzdGd1YWMtdGVzdC1zcGljZS1jYTAgFw0yNjEwMTkyMTU1\nMTJaGA8yMTI2MDkyNTIxNTUxMlowITEfMB0GA1UEAwwWcnVzdGd1YWMtdGVzdC1z\ncGljZS1jYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIvhWKoJ7dEZN36dAM8m\n2ojVFBkn4qxiiOi5YhND5Hy1VDLy2Q86C23Gg8hk/fbRkoq8iTUY3gC55Dm8eirF\noqCjUzBRMB0GA1UdDgQWBBQ08QKHFP8vcO712KrHi0jq/5I/LTAfBgNVHSMEGDAW\ngBQ08QKHFP8vcO712KrHi0jq/5I/LTAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49\nBAMCA0gAMEUCIAWylpMd4z0/RzhqoZ5KrRM7yK7dqBPtqSURR9N/EIDCAiEA3ZKQ\nEBXwI56ZrYSCVoZtTmBidFJ02/UkSjL93Wpg+Ko=\n-----END CERTIFICATE-----\n");
+        assert_eq!(checked_spice_ca(Some(good.clone())).unwrap(), Some(good));
+        assert_eq!(checked_spice_ca(None).unwrap(), None);
+        assert_eq!(checked_spice_ca(Some("  ".into())).unwrap(), None);
+        // Not PEM (a path): passed through as before.
+        assert!(checked_spice_ca(Some("/etc/pki/spice-ca.pem".into())).is_ok());
+        // Claims to be PEM, holds no certificate: refused.
+        for bad in [
+            "-----BEGIN CERTIFICATE-----\nnot base64 at all\n-----END CERTIFICATE-----\n",
+            "-----BEGIN CERTIFICATE-----\n",
+            "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+        ] {
+            assert!(checked_spice_ca(Some(bad.into())).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
