@@ -160,6 +160,7 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ### Features
 - [Roles & Access Control](docs/roles-and-access-control.md): OIDC, roles, group mappings, API tokens
 - [Web Browser Sessions](docs/web-sessions.md): autofill, domain allowlisting, login scripts
+- [SPICE and Proxmox VE Sessions](docs/spice-and-proxmox.md): SPICE displays, Proxmox VE consoles, API tokens, TLS, troubleshooting
 - [VDI Desktop Containers](docs/vdi.md): Docker desktops, image requirements, persistent homes
 - [RDP Video Performance](docs/rdp-video-performance.md): H.264 passthrough, GFX pipeline, xrdp tuning
 - [RDP H.264 Passthrough](docs/rdp-h264.md): enabling it, and the Windows host settings it requires

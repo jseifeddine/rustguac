@@ -103,6 +103,12 @@ Connects guacd to a target VNC server. Supports password-based authentication, p
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach VNC targets through bastion hosts.
 
+### SPICE and Proxmox VE
+
+SPICE sessions connect guacd's SPICE plugin to a SPICE server, such as a libvirt/QEMU VM console, with optional TLS, CA verification, certificate-subject pinning and a SPICE proxy. Proxmox VE console sessions open a Proxmox VE VM's console: at connect time rustguac fetches a one-time SPICE ticket from the Proxmox API, so only the API token is stored.
+
+Both support optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts). See [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) for entry fields, the API token, TLS and troubleshooting.
+
 ### Web browser
 
 Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd via VNC to the local display. The user sees a full browser session in their own browser. Each session gets an isolated Chromium profile directory.
@@ -119,7 +125,7 @@ VDI sessions support persistent home directories, per-entry resource limits and 
 
 ## SSH tunnel / jump hosts
 
-SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the rustguac server. VDI sessions do not support tunnels (containers run locally).
+SSH, RDP, VNC, SPICE, Proxmox VE, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the rustguac server. VDI sessions do not support tunnels (containers run locally).
 
 Each hop in the chain establishes an SSH connection and creates a local TCP port forward (`direct-tcpip`). The hops are chained sequentially — each hop connects through the previous hop's local listener. The final hop forwards to the actual target (e.g., an RDP server on port 3389).
 
@@ -181,6 +187,7 @@ scripts/           Utility scripts (drive-setup.sh)
 ### Features
 - [Roles and Access Control](roles-and-access-control.md) -- 4-tier role hierarchy, OIDC groups, user API tokens
 - [Web Browser Sessions](web-sessions.md) -- autofill, domain allowlisting, login scripts
+- [SPICE and Proxmox VE Sessions](spice-and-proxmox.md) -- SPICE displays, Proxmox VE consoles, API tokens, TLS, troubleshooting
 - [Credential Variables](credential-variables.md) -- shared credentials across entries
 - [Reports](reports.md) -- session analytics, history, CSV export
 - [RDP Video Performance](rdp-video-performance.md) -- H.264 passthrough, GFX pipeline, xrdp/Windows tuning
