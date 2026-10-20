@@ -17,6 +17,14 @@
             width: 100%;
             height: 100%;
         }
+        /* Actual size view: always-visible scroll bars, so a desktop wider
+           than the window shows that there is more of it (overlay scroll
+           bars, as on macOS, stay hidden until you scroll). */
+        #display::-webkit-scrollbar { width: 14px; height: 14px; }
+        #display::-webkit-scrollbar-track { background: #111; }
+        #display::-webkit-scrollbar-thumb { background: #555; border: 3px solid #111; border-radius: 7px; }
+        #display::-webkit-scrollbar-thumb:hover { background: #777; }
+        #display::-webkit-scrollbar-corner { background: #111; }
         #status {
             position: fixed;
             top: 0;
@@ -895,6 +903,16 @@
 
             var controlsPanel = null, controlsPanelOpen = false;
 
+            // View: 'fit' scales the desktop to the window, 'actual' draws it
+            // at 100% with scroll bars. Remembered per browser.
+            var viewMode = 'fit';
+            try { if (localStorage.getItem('rustguac_view_mode') === 'actual') viewMode = 'actual'; } catch (e) {}
+            function setViewMode(mode) {
+                viewMode = mode === 'actual' ? 'actual' : 'fit';
+                try { localStorage.setItem('rustguac_view_mode', viewMode); } catch (e) {}
+                scaleDisplay();
+            }
+
             // Press each keysym in order, then release in reverse. Used for
             // combos the browser/OS would otherwise intercept (Ctrl+Alt+Del).
             function sendKeyCombo(keys) {
@@ -928,6 +946,12 @@
                         '<div id="ctrl-keys" style="display:flex;flex-wrap:wrap;gap:0.4em;"></div>' +
                     '</div>' +
                     '<div style="padding:0.8em 1em;border-top:1px solid var(--border);">' +
+                        '<div style="color:var(--text-muted);font-size:0.85em;margin-bottom:0.5em;letter-spacing:0.05em;">VIEW</div>' +
+                        '<label style="display:flex;align-items:center;gap:0.5em;padding:0.25em 0;font-size:0.9em;cursor:pointer;"><input type="radio" name="ctrl-view" id="ctrl-view-fit" value="fit"><span>Fit to window</span></label>' +
+                        '<label style="display:flex;align-items:center;gap:0.5em;padding:0.25em 0;font-size:0.9em;cursor:pointer;"><input type="radio" name="ctrl-view" id="ctrl-view-actual" value="actual"><span>Actual size, with scroll bars</span></label>' +
+                        '<div style="color:var(--text-dim);font-size:0.75em;margin-top:0.4em;">For a remote desktop bigger than this window, such as two monitors viewed from a laptop.</div>' +
+                    '</div>' +
+                    '<div style="padding:0.8em 1em;border-top:1px solid var(--border);">' +
                         '<div style="color:var(--text-muted);font-size:0.85em;margin-bottom:0.5em;letter-spacing:0.05em;">MONITORS</div>' +
                         '<div id="ctrl-monitors"></div>' +
                     '</div>';
@@ -940,6 +964,12 @@
                     b.style.cssText = 'padding:0.4em 0.7em;background:var(--input);color:var(--primary);border:1px solid var(--border);font-family:monospace;font-size:0.85em;border-radius:3px;cursor:pointer;';
                     b.addEventListener('click', function() { sendKeyCombo(k.keys); });
                     keysEl.appendChild(b);
+                });
+                document.getElementById('ctrl-view-' + viewMode).checked = true;
+                ['fit', 'actual'].forEach(function(m) {
+                    document.getElementById('ctrl-view-' + m).addEventListener('change', function(e) {
+                        if (e.target.checked) setViewMode(m);
+                    });
                 });
                 renderMonitorControls();
             }
@@ -2220,6 +2250,27 @@
                     el.style.marginTop = '0';
                     applyFill(el, 0, 0, 0, 0);
                 }
+                else if (viewMode === 'actual') {
+                    // Actual size: one framebuffer pixel per CSS pixel, with
+                    // scroll bars when the desktop is bigger than the window
+                    // (a two-monitor desktop on a one-monitor laptop). The
+                    // container is positioned so it is the display's
+                    // offsetParent, which is how Guacamole.Position takes its
+                    // scroll offset into account for the pointer.
+                    display.scale(1);
+                    applyFill(el, 0, 0, 0, 0, true);
+                    displayEl.style.overflow = 'auto';
+                    displayEl.style.position = 'absolute';
+                    displayEl.style.left = panelOffset + 'px';
+                    displayEl.style.top = '0';
+                    displayEl.style.width = availW + 'px';
+                    displayEl.style.height = availH + 'px';
+                    displayEl.style.marginLeft = '0';
+                    // Centre a desktop smaller than the window. clientWidth
+                    // excludes any scroll bar, so the other axis still centres.
+                    el.style.marginLeft = Math.max(0, (displayEl.clientWidth - dw) / 2) + 'px';
+                    el.style.marginTop = Math.max(0, (displayEl.clientHeight - dh) / 2) + 'px';
+                }
                 else {
                     // Single display: scale the whole framebuffer to fit.
                     var scale = Math.min(availW / dw, availH / dh);
@@ -2234,6 +2285,8 @@
                     displayEl.style.top = '';
                     displayEl.style.left = '';
                     displayEl.style.marginLeft = '0';
+                    displayEl.scrollLeft = 0;
+                    displayEl.scrollTop = 0;
                     // Centre the (possibly stretched) framebuffer in the
                     // available area so any residual mod-16 margin is split
                     // evenly and shows the dark page background, instead of a

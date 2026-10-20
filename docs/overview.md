@@ -105,6 +105,8 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 **Screen size.** By default the remote screen keeps its own size and is scaled to fit the browser window. Tick **Resize the remote desktop to fit the window** only for servers with their own virtual screen (TigerVNC, Xvnc). A physical console (UltraVNC, RealVNC, x11vnc) can't resize, and asking it to stalls the session.
 
+A remote screen much bigger than the window, such as two monitors viewed from a laptop, is hard to read when scaled. In the session's **Controls** panel, **View** switches between **Fit to window** and **Actual size, with scroll bars**, which shows it at 100% and scrolls. The choice is remembered in that browser and applies to every session type.
+
 #### VNC network presets
 
 **Network** on a VNC connection chooses how the server encodes the screen for rustguac, like UltraVNC Viewer's quick options:
