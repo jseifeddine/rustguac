@@ -36,6 +36,6 @@ assert.deepEqual(acknowledgements, [
     { message: 'OK', code: 0 }
 ], 'the stream should be accepted once the reader is ready');
 
-reader.onprogress();
-assert.deepEqual(acknowledgements.at(-1), { message: 'Received', code: 0 });
+assert.equal(reader.onprogress, undefined,
+    'BlobReader handles per-blob ACKs without an extra callback');
 console.log('client-file-stream-ack: ok');

@@ -1521,9 +1521,6 @@
             // ── File download handler (server-initiated file transfer) ──
             client.onfile = function(stream, mimetype, filename) {
                 var reader = new Guacamole.BlobReader(stream, mimetype);
-                reader.onprogress = function(length) {
-                    stream.sendAck('Received', Guacamole.Status.Code.SUCCESS);
-                };
                 reader.onend = function() {
                     var blob = reader.getBlob();
                     var a = document.createElement('a');
