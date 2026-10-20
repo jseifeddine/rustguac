@@ -962,6 +962,11 @@
                         <option value="32">32-bit</option>
                     </select>
                 </label>
+                <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.6em">
+                    <input type="checkbox" id="em-vnc-resize" style="display:inline;width:auto;margin-right:0.5em">
+                    Resize the remote desktop to fit the window
+                </label>
+                <div class="field-hint">Only for VNC servers with their own virtual screen, such as TigerVNC or Xvnc. Leave off for a physical console (UltraVNC, RealVNC, x11vnc): they can't resize, and the session stalls if asked to. When off, the screen is scaled to fit instead.</div>
                 <div class="entry-only">
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-vnc-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
@@ -4408,6 +4413,7 @@
             document.getElementById('em-vnc-username').value = '';
             document.getElementById('em-vnc-password').value = '';
             document.getElementById('em-vnc-color-depth').value = '';
+            document.getElementById('em-vnc-resize').checked = false;
             document.getElementById('em-vnc-prompt-creds').checked = false;
             document.getElementById('em-spice-hostname').value = '';
             document.getElementById('em-spice-port').value = '5900';
@@ -4569,6 +4575,7 @@
                     document.getElementById('em-vnc-port').value = entryData.port || '5900';
                     document.getElementById('em-vnc-username').value = entryData.username || '';
                     document.getElementById('em-vnc-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-vnc-resize').checked = !!entryData.vnc_resize;
                     document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'spice') {
                     document.getElementById('em-spice-hostname').value = entryData.hostname || '';
@@ -4794,6 +4801,7 @@
                 if (pw) entry.password = pw;
                 var cd = document.getElementById('em-vnc-color-depth').value;
                 if (cd) entry.color_depth = parseInt(cd);
+                if (document.getElementById('em-vnc-resize').checked) entry.vnc_resize = true;
                 if (document.getElementById('em-vnc-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'spice') {
                 var h = document.getElementById('em-spice-hostname').value.trim();

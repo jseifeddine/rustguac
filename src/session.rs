@@ -104,6 +104,11 @@ pub struct CreateSessionRequest {
     /// Allowed domains for web sessions. When set, Chromium can only reach these domains.
     pub allowed_domains: Option<Vec<String>>,
     /// Disable clipboard copy (server → client).
+    /// VNC: ask the server to resize its screen to the browser window.
+    /// Off by default: only servers with a virtual screen (Xvnc, TigerVNC)
+    /// can, and one that can't leaves the session frozen.
+    #[serde(default)]
+    pub vnc_resize: Option<bool>,
     pub disable_copy: Option<bool>,
     /// Disable clipboard paste (client → server).
     pub disable_paste: Option<bool>,
@@ -1354,6 +1359,8 @@ impl SessionManager {
                     dpi,
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
+                    // Off unless the entry says the server can resize.
+                    display_resize: req.vnc_resize.unwrap_or(false),
                     wol: wol.clone(),
                 });
                 (
@@ -1664,6 +1671,8 @@ impl SessionManager {
                     dpi,
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
+                    // Our own Xvnc can always be resized to the browser.
+                    display_resize: true,
                     // Local Xvnc — WoL not applicable.
                     wol: guacd::WolParams::default(),
                 });
@@ -3148,6 +3157,21 @@ mod tests {
         ] {
             assert!(checked_spice_ca(Some(bad.into())).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn vnc_entries_do_not_resize_the_server_unless_set() {
+        // The request field defaults to "don't resize", so an entry or ad-hoc
+        // VNC connection that says nothing leaves the server's screen alone.
+        let req: CreateSessionRequest =
+            serde_json::from_value(serde_json::json!({"session_type": "vnc", "hostname": "h"}))
+                .unwrap();
+        assert!(!req.vnc_resize.unwrap_or(false));
+        let req: CreateSessionRequest = serde_json::from_value(
+            serde_json::json!({"session_type": "vnc", "hostname": "h", "vnc_resize": true}),
+        )
+        .unwrap();
+        assert_eq!(req.vnc_resize, Some(true));
     }
 
     #[test]

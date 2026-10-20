@@ -245,3 +245,27 @@ test('file transfer is offered when the site has it on, and always to admins', a
         if (role === 'admin') await expect(page.getByText('above the site\'s defaults are capped')).toBeHidden();
     }
 });
+
+// VNC display resize is off unless asked: a physical console can't resize,
+// and the session stalls if it is asked to.
+test('VNC asks the server to resize only when the box is ticked', async ({ page }) => {
+    const api = await installApi(page, { role: 'poweruser' });
+    await page.goto('/connections.html');
+    await settle(page);
+    for (const tick of [false, true]) {
+        await openEditor(page);
+        await page.locator('#em-type').selectOption('vnc');
+        const box = page.locator('#em-vnc-resize');
+        await expect(box).toBeVisible();
+        await expect(box).not.toBeChecked();
+        if (tick) await box.check();
+        await page.locator('#em-vnc-hostname').fill('192.0.2.20');
+        const before = adhocCalls(api).length;
+        await Promise.all([page.waitForEvent('popup'), page.locator('#em-connect').click()]);
+        await expect.poll(() => adhocCalls(api).length).toBe(before + 1);
+        const sent = adhocCalls(api)[before].body.entry;
+        expect(sent.type).toBe('vnc');
+        if (tick) expect(sent.vnc_resize).toBe(true);
+        else expect(sent.vnc_resize).toBeUndefined();
+    }
+});

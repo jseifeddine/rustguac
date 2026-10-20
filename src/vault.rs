@@ -350,6 +350,10 @@ pub struct AddressBookEntry {
     /// these domains (plus localhost). Uses --host-rules to block all others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_domains: Option<Vec<String>>,
+    /// VNC: resize the server's screen to the browser window. Off unless set:
+    /// only servers with a virtual screen (Xvnc, TigerVNC) can resize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vnc_resize: Option<bool>,
     /// Disable clipboard copy (server → client). Prevents copying from the remote session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_copy: Option<bool>,
@@ -591,6 +595,9 @@ pub struct EntryInfo {
     /// Allowed domains for web sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_domains: Option<Vec<String>>,
+    /// VNC: resize the server's screen to the browser window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vnc_resize: Option<bool>,
     /// Disable clipboard copy (server → client).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_copy: Option<bool>,
@@ -772,6 +779,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             login_script: e.login_script.clone(),
             autofill: e.autofill.clone(),
             allowed_domains: e.allowed_domains.clone(),
+            vnc_resize: e.vnc_resize,
             disable_copy: e.disable_copy,
             disable_paste: e.disable_paste,
             banner: e.banner.clone(),

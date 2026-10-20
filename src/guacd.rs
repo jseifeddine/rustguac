@@ -107,6 +107,12 @@ pub struct VncParams {
     pub dpi: u32,
     pub disable_copy: bool,
     pub disable_paste: bool,
+    /// Ask the VNC server to change its screen to the browser's size. Only
+    /// servers with their own virtual screen can (Xvnc, TigerVNC); a physical
+    /// console (UltraVNC, RealVNC, x11vnc) can't, and libvncclient then stops
+    /// requesting updates while it waits for a resize that never comes, so
+    /// the session all but freezes. Off, guacd scales the screen instead.
+    pub display_resize: bool,
     /// Wake-on-LAN parameters.
     pub wol: WolParams,
 }
@@ -156,6 +162,33 @@ impl SpiceParams {
         } else {
             self.port
         }
+    }
+}
+
+/// The value guacd gets for one VNC argument.
+fn vnc_arg_value(name: &str, p: &VncParams) -> String {
+    match name {
+        "hostname" => p.hostname.clone(),
+        "port" => p.port.to_string(),
+        "width" => p.width.to_string(),
+        "height" => p.height.to_string(),
+        "dpi" => p.dpi.to_string(),
+        "username" => p.username.clone().unwrap_or_default(),
+        "password" => p.password.clone().unwrap_or_default(),
+        "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
+        "cursor" => "local".into(),
+        "read-only" => "false".into(),
+        "swap-red-blue" => "false".into(),
+        "dest-host" => String::new(),
+        "dest-port" => String::new(),
+        "enable-audio" => "false".into(),
+        "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+        "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
+        "disable-display-resize" => if p.display_resize { "false" } else { "true" }.into(),
+        _ => wol_arg_value(name, &p.wol).unwrap_or_else(|| {
+            tracing::debug!("Unknown guacd VNC parameter '{}', sending empty", name);
+            String::new()
+        }),
     }
 }
 
@@ -383,28 +416,7 @@ pub async fn connect_and_handshake(
                     String::new()
                 }),
             },
-            ConnectionParams::Vnc(p) => match name.as_str() {
-                "hostname" => p.hostname.clone(),
-                "port" => p.port.to_string(),
-                "width" => p.width.to_string(),
-                "height" => p.height.to_string(),
-                "dpi" => p.dpi.to_string(),
-                "username" => p.username.clone().unwrap_or_default(),
-                "password" => p.password.clone().unwrap_or_default(),
-                "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
-                "cursor" => "local".into(),
-                "read-only" => "false".into(),
-                "swap-red-blue" => "false".into(),
-                "dest-host" => String::new(),
-                "dest-port" => String::new(),
-                "enable-audio" => "false".into(),
-                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
-                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
-                _ => wol_arg_value(name, &p.wol).unwrap_or_else(|| {
-                    tracing::debug!("Unknown guacd VNC parameter '{}', sending empty", name);
-                    String::new()
-                }),
-            },
+            ConnectionParams::Vnc(p) => vnc_arg_value(name.as_str(), p),
             ConnectionParams::Rdp(p) => match name.as_str() {
                 "hostname" => p.hostname.clone(),
                 "port" => p.port.to_string(),
@@ -732,6 +744,32 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn vnc(display_resize: bool) -> VncParams {
+        VncParams {
+            hostname: "192.0.2.10".into(),
+            port: 5900,
+            username: None,
+            password: None,
+            color_depth: None,
+            width: 2560,
+            height: 1266,
+            dpi: 96,
+            disable_copy: false,
+            disable_paste: false,
+            display_resize,
+            wol: WolParams::default(),
+        }
+    }
+
+    #[test]
+    fn vnc_display_resize_is_off_unless_asked() {
+        // A physical console can't resize, and libvncclient then stops asking
+        // for updates while it waits: guacd must be told not to try.
+        assert_eq!(vnc_arg_value("disable-display-resize", &vnc(false)), "true");
+        assert_eq!(vnc_arg_value("disable-display-resize", &vnc(true)), "false");
+        assert_eq!(vnc_arg_value("hostname", &vnc(false)), "192.0.2.10");
     }
 
     #[test]
