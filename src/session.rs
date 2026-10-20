@@ -109,6 +109,11 @@ pub struct CreateSessionRequest {
     /// can, and one that can't leaves the session frozen.
     #[serde(default)]
     pub vnc_resize: Option<bool>,
+    /// VNC: a network preset (`auto`, `lan`, `wan`, `slow`) choosing the
+    /// encodings, compression and JPEG quality between the server and guacd,
+    /// like UltraVNC Viewer's quick options. Unset or `auto`: the defaults.
+    #[serde(default)]
+    pub vnc_network: Option<String>,
     pub disable_copy: Option<bool>,
     /// Disable clipboard paste (client → server).
     pub disable_paste: Option<bool>,
@@ -1348,12 +1353,13 @@ impl SessionManager {
                     "Creating new VNC session"
                 );
 
+                let preset = vnc_network(req.vnc_network.as_deref())?;
                 let params = guacd::ConnectionParams::Vnc(guacd::VncParams {
                     hostname: connect_host,
                     port,
                     username: req.username.clone().filter(|u| !u.is_empty()),
                     password: req.password.clone(),
-                    color_depth: req.color_depth,
+                    color_depth: req.color_depth.or(preset.and_then(|p| p.3)),
                     width,
                     height,
                     dpi,
@@ -1361,6 +1367,9 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                     // Off unless the entry says the server can resize.
                     display_resize: req.vnc_resize.unwrap_or(false),
+                    encodings: preset.map(|p| p.0.to_string()),
+                    compress_level: preset.map(|p| p.1),
+                    quality_level: preset.map(|p| p.2),
                     wol: wol.clone(),
                 });
                 (
@@ -1673,6 +1682,9 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                     // Our own Xvnc can always be resized to the browser.
                     display_resize: true,
+                    encodings: None,
+                    compress_level: None,
+                    quality_level: None,
                     // Local Xvnc — WoL not applicable.
                     wol: guacd::WolParams::default(),
                 });
@@ -2825,6 +2837,21 @@ fn drive_cleanup_settings(drive: &Option<DriveConfig>) -> (bool, u64) {
     }
 }
 
+/// The settings for a VNC network preset, or `None` for `auto` / unset. An
+/// unknown name is refused rather than silently treated as `auto`.
+type VncPreset = (&'static str, u8, u8, Option<u8>);
+fn vnc_network(preset: Option<&str>) -> Result<Option<VncPreset>, SessionError> {
+    match preset.map(str::trim).filter(|p| !p.is_empty()) {
+        None | Some("auto") => Ok(None),
+        Some(p) => guacd::vnc_network_preset(p).map(Some).ok_or_else(|| {
+            SessionError::ValidationError(format!(
+                "vnc_network must be one of {}",
+                guacd::VNC_NETWORK_PRESETS.join(", ")
+            ))
+        }),
+    }
+}
+
 /// A SPICE CA certificate on its way to guacd. guacd's SPICE plugin hands a
 /// PEM to spice-gtk to verify the server against, but if the PEM holds no
 /// certificate spice-gtk quietly falls back to the system trust store, so a
@@ -3172,6 +3199,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(req.vnc_resize, Some(true));
+    }
+
+    #[test]
+    fn vnc_network_preset_names_are_checked() {
+        assert!(vnc_network(None).unwrap().is_none());
+        assert!(vnc_network(Some("")).unwrap().is_none());
+        assert!(vnc_network(Some("auto")).unwrap().is_none());
+        assert_eq!(
+            vnc_network(Some("lan")).unwrap().unwrap().0,
+            "ultra zrle hextile copyrect raw"
+        );
+        assert!(
+            vnc_network(Some("modem")).is_err(),
+            "an unknown preset is refused, not ignored"
+        );
     }
 
     #[test]

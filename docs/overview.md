@@ -103,6 +103,23 @@ Connects guacd to a target VNC server. Supports password-based authentication, p
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach VNC targets through bastion hosts.
 
+**Screen size.** By default the remote screen keeps its own size and is scaled to fit the browser window. Tick **Resize the remote desktop to fit the window** only for servers with their own virtual screen (TigerVNC, Xvnc). A physical console (UltraVNC, RealVNC, x11vnc) can't resize, and asking it to stalls the session.
+
+#### VNC network presets
+
+**Network** on a VNC connection chooses how the server encodes the screen for rustguac, like UltraVNC Viewer's quick options:
+
+| Preset | Encodings (in order) | Compression | JPEG quality | Colour |
+|---|---|---|---|---|
+| Auto (default) | negotiated | default | default | as set |
+| LAN | Ultra, ZRLE, Hextile, CopyRect, Raw | 1 | 9 | as set |
+| WAN | Tight, ZRLE, CopyRect | 6 | 6 | as set |
+| Slow link | Tight, CopyRect | 9 | 3 | 16-bit unless set |
+
+This is the link between the VNC server and rustguac. The picture rustguac sends on to the browser is compressed separately, so a preset helps most when the VNC server is far from rustguac.
+
+**Authentication.** These work: VNC password, VeNCrypt (including username and password over TLS, e.g. TigerVNC with PAM), macOS Screen Sharing, and UltraVNC's Windows login (MS-Logon II, "New MS-Logon"), which allows Active Directory accounts. These don't: RealVNC's or UltraVNC's RSA-AES encryption (security types 5, 6, 129, 130), UltraVNC's encryption plugins, and MS-Logon III. A server offering only those fails with "Unknown authentication scheme". MS-Logon II protects the password weakly and doesn't encrypt the session, so use it on a trusted network or through a jump host.
+
 ### SPICE and Proxmox VE
 
 SPICE sessions connect guacd's SPICE plugin to a SPICE server, such as a libvirt/QEMU VM console, with optional TLS, CA verification, certificate-subject pinning and a SPICE proxy. Proxmox VE console sessions open a Proxmox VE VM's console: at connect time rustguac fetches a one-time SPICE ticket from the Proxmox API, so only the API token is stored.

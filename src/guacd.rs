@@ -113,9 +113,35 @@ pub struct VncParams {
     /// requesting updates while it waits for a resize that never comes, so
     /// the session all but freezes. Off, guacd scales the screen instead.
     pub display_resize: bool,
+    /// How the VNC server should encode the screen for guacd: encodings in
+    /// order of preference, and Tight's zlib compression and JPEG quality
+    /// (0-9). `None` leaves libvncclient's defaults.
+    pub encodings: Option<String>,
+    pub compress_level: Option<u8>,
+    pub quality_level: Option<u8>,
     /// Wake-on-LAN parameters.
     pub wol: WolParams,
 }
+
+/// A VNC "network" preset, like UltraVNC Viewer's quick options: how to
+/// trade picture quality for bandwidth between the VNC server and guacd.
+/// Returns (encodings, compress level, quality level, colour depth to use
+/// when the connection doesn't set one). `None` for `auto` or an unknown
+/// name, which leave every setting at its default.
+pub fn vnc_network_preset(preset: &str) -> Option<(&'static str, u8, u8, Option<u8>)> {
+    match preset {
+        // Fast, lossless-looking: UltraVNC's own LZO encoding first.
+        "lan" => Some(("ultra zrle hextile copyrect raw", 1, 9, None)),
+        // Tight with JPEG for photos and video, moderate compression.
+        "wan" => Some(("tight zrle copyrect", 6, 6, None)),
+        // As little bandwidth as possible.
+        "slow" => Some(("tight copyrect", 9, 3, Some(16))),
+        _ => None,
+    }
+}
+
+/// The preset names `vnc_network_preset` knows, `auto` included.
+pub const VNC_NETWORK_PRESETS: &[&str] = &["auto", "lan", "wan", "slow"];
 
 /// SPICE connection parameters to pass to guacd.
 ///
@@ -185,6 +211,9 @@ fn vnc_arg_value(name: &str, p: &VncParams) -> String {
         "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
         "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
         "disable-display-resize" => if p.display_resize { "false" } else { "true" }.into(),
+        "encodings" => p.encodings.clone().unwrap_or_default(),
+        "compress-level" => p.compress_level.map(|v| v.to_string()).unwrap_or_default(),
+        "quality-level" => p.quality_level.map(|v| v.to_string()).unwrap_or_default(),
         _ => wol_arg_value(name, &p.wol).unwrap_or_else(|| {
             tracing::debug!("Unknown guacd VNC parameter '{}', sending empty", name);
             String::new()
@@ -759,8 +788,37 @@ mod tests {
             disable_copy: false,
             disable_paste: false,
             display_resize,
+            encodings: None,
+            compress_level: None,
+            quality_level: None,
             wol: WolParams::default(),
         }
+    }
+
+    #[test]
+    fn vnc_network_presets_set_encodings_compression_and_quality() {
+        // Auto (no preset): every one empty, so guacd keeps libvncclient's
+        // own defaults.
+        let p = vnc(false);
+        for arg in ["encodings", "compress-level", "quality-level"] {
+            assert_eq!(vnc_arg_value(arg, &p), "", "{arg}");
+        }
+        let (enc, compress, quality, depth) = vnc_network_preset("slow").unwrap();
+        let mut p = vnc(false);
+        p.encodings = Some(enc.into());
+        p.compress_level = Some(compress);
+        p.quality_level = Some(quality);
+        assert_eq!(vnc_arg_value("encodings", &p), "tight copyrect");
+        assert_eq!(vnc_arg_value("compress-level", &p), "9");
+        assert_eq!(vnc_arg_value("quality-level", &p), "3");
+        assert_eq!(depth, Some(16));
+        // Every listed preset other than auto resolves; anything else doesn't.
+        for name in VNC_NETWORK_PRESETS.iter().filter(|n| **n != "auto") {
+            let (enc, c, q, _) = vnc_network_preset(name).unwrap();
+            assert!(!enc.is_empty() && c <= 9 && q <= 9, "{name}");
+        }
+        assert!(vnc_network_preset("auto").is_none());
+        assert!(vnc_network_preset("modem").is_none());
     }
 
     #[test]

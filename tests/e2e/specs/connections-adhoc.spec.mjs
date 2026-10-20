@@ -269,3 +269,23 @@ test('VNC asks the server to resize only when the box is ticked', async ({ page 
         else expect(sent.vnc_resize).toBeUndefined();
     }
 });
+
+// The VNC network preset is sent only when one is picked.
+test('a VNC network preset is sent when chosen, and nothing for Auto', async ({ page }) => {
+    const api = await installApi(page, { role: 'poweruser' });
+    await page.goto('/connections.html');
+    await settle(page);
+    for (const preset of ['', 'slow']) {
+        await openEditor(page);
+        await page.locator('#em-type').selectOption('vnc');
+        await expect(page.locator('#em-vnc-network')).toHaveValue('');
+        if (preset) await page.locator('#em-vnc-network').selectOption(preset);
+        await page.locator('#em-vnc-hostname').fill('192.0.2.21');
+        const before = adhocCalls(api).length;
+        await Promise.all([page.waitForEvent('popup'), page.locator('#em-connect').click()]);
+        await expect.poll(() => adhocCalls(api).length).toBe(before + 1);
+        const sent = adhocCalls(api)[before].body.entry;
+        if (preset) expect(sent.vnc_network).toBe(preset);
+        else expect(sent.vnc_network).toBeUndefined();
+    }
+});

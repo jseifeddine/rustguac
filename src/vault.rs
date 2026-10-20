@@ -354,6 +354,9 @@ pub struct AddressBookEntry {
     /// only servers with a virtual screen (Xvnc, TigerVNC) can resize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vnc_resize: Option<bool>,
+    /// VNC network preset: `auto`, `lan`, `wan` or `slow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vnc_network: Option<String>,
     /// Disable clipboard copy (server → client). Prevents copying from the remote session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_copy: Option<bool>,
@@ -598,6 +601,9 @@ pub struct EntryInfo {
     /// VNC: resize the server's screen to the browser window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vnc_resize: Option<bool>,
+    /// VNC network preset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vnc_network: Option<String>,
     /// Disable clipboard copy (server → client).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_copy: Option<bool>,
@@ -780,6 +786,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             autofill: e.autofill.clone(),
             allowed_domains: e.allowed_domains.clone(),
             vnc_resize: e.vnc_resize,
+            vnc_network: e.vnc_network.clone(),
             disable_copy: e.disable_copy,
             disable_paste: e.disable_paste,
             banner: e.banner.clone(),

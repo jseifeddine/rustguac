@@ -219,6 +219,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `kerberos_cache` | string | RDP | Path to Kerberos credential cache (advanced) |
 | `color_depth` | integer | RDP | Color depth in bits (8, 16, 24, 32) |
 | `vnc_resize` | boolean | VNC | Ask the VNC server to resize its screen to the browser window (default `false`: the screen is scaled to fit). Only for servers with their own virtual screen (TigerVNC, Xvnc); a physical console such as UltraVNC, RealVNC or x11vnc can't resize, and the session stalls if asked. |
+| `vnc_network` | string | VNC | Network preset for the link between the VNC server and rustguac: `auto` (default), `lan`, `wan` or `slow`. See [VNC network presets](overview.md#vnc-network-presets). |
 | `enable_drive` | boolean | RDP, SSH | Enable file transfer / drive redirection |
 | `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
 | `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
@@ -649,6 +650,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `kdc_url` | string | RDP | Kerberos KDC URL |
 | `color_depth` | integer | RDP | Color depth |
 | `vnc_resize` | boolean | VNC | Resize the server's screen to the browser window (default `false`). See [`POST /api/sessions`](#post-apisessions). |
+| `vnc_network` | string | VNC | Network preset: `auto` (default), `lan`, `wan` or `slow`. |
 | `enable_drive` | boolean | RDP, SSH | Enable file transfer |
 | `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
 | `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
