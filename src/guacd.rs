@@ -143,6 +143,34 @@ pub fn vnc_network_preset(preset: &str) -> Option<(&'static str, u8, u8, Option<
 /// The preset names `vnc_network_preset` knows, `auto` included.
 pub const VNC_NETWORK_PRESETS: &[&str] = &["auto", "lan", "wan", "slow"];
 
+/// The RDP keyboard layouts guacd has a keymap for (guacd `server-layout`),
+/// named as in guacamole-server's `src/protocols/rdp/keymaps/*.keymap`.
+pub const RDP_KEYBOARD_LAYOUTS: &[&str] = &[
+    "cs-cz-qwertz",
+    "da-dk-qwerty",
+    "de-ch-qwertz",
+    "de-de-qwertz",
+    "en-gb-qwerty",
+    "en-us-qwerty",
+    "es-es-qwerty",
+    "es-latam-qwerty",
+    "failsafe",
+    "fr-be-azerty",
+    "fr-ca-qwerty",
+    "fr-ch-qwertz",
+    "fr-fr-azerty",
+    "hu-hu-qwertz",
+    "it-it-qwerty",
+    "ja-jp-qwerty",
+    "no-no-qwerty",
+    "pl-pl-qwerty",
+    "pt-br-qwerty",
+    "pt-pt-qwerty",
+    "ro-ro-qwerty",
+    "sv-se-qwerty",
+    "tr-tr-qwerty",
+];
+
 /// SPICE connection parameters to pass to guacd.
 ///
 /// Credentials (`password`/`username`) are sent as connect args: guacd's SPICE

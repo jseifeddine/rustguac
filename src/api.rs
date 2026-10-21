@@ -3781,6 +3781,10 @@ pub struct ConnectRequest {
     pub screen_height: Option<u32>,
     #[serde(default)]
     pub dpi: Option<u32>,
+    /// The browser user's keyboard layout (a guacd `server-layout` name),
+    /// for an RDP or VDI entry with no layout of its own.
+    #[serde(default)]
+    pub keyboard_layout: Option<String>,
     #[serde(default)]
     pub banner: Option<String>,
     /// Override or supply credentials at connect time (never stored).
@@ -3945,6 +3949,19 @@ pub struct EntryDisplay {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
+    /// The browser user's own keyboard layout, used for an RDP or VDI entry
+    /// that leaves its layout at the server default.
+    pub keyboard_layout: Option<String>,
+}
+
+/// A keyboard layout the browser asked for, if guacd knows it. Anything
+/// else is dropped rather than refused: it is a preference, and an unknown
+/// one should not stop the connection.
+pub fn browser_keyboard_layout(layout: Option<&str>) -> Option<String> {
+    layout
+        .map(str::trim)
+        .filter(|l| crate::guacd::RDP_KEYBOARD_LAYOUTS.contains(l))
+        .map(str::to_string)
 }
 
 /// The saved entry a session comes from, for its recording and reports.
@@ -3985,7 +4002,10 @@ pub fn session_request_from_entry(
         url: entry.url,
         domain: entry.domain,
         security: entry.security,
-        server_layout: entry.server_layout,
+        server_layout: entry
+            .server_layout
+            .filter(|l| !l.trim().is_empty())
+            .or(display.keyboard_layout),
         ignore_cert: entry.ignore_cert,
         auth_pkg: entry.auth_pkg,
         kdc_url: entry.kdc_url,
@@ -4081,6 +4101,7 @@ fn entry_connect_request(
         width,
         height,
         dpi: req.dpi,
+        keyboard_layout: browser_keyboard_layout(req.keyboard_layout.as_deref()),
     };
     let attribution = EntryRef {
         key: entry_key.to_string(),
@@ -4335,6 +4356,7 @@ fn adhoc_session_request(
         width,
         height,
         dpi: req.dpi,
+        keyboard_layout: browser_keyboard_layout(req.keyboard_layout.as_deref()),
     };
     let mut create_req = session_request_from_entry(entry, display, None)?;
     create_req.generate_keypair = req.generate_keypair.filter(|&g| g);
@@ -4361,6 +4383,8 @@ pub struct AdhocConnectRequest {
     pub screen_height: Option<u32>,
     #[serde(default)]
     pub dpi: Option<u32>,
+    #[serde(default)]
+    pub keyboard_layout: Option<String>,
 }
 
 /// POST /api/addressbook/adhoc/connect — Connect to a host that is not a
@@ -7443,6 +7467,7 @@ fn quick_connect_entry_request(
         width: query.width,
         height: query.height,
         dpi: query.dpi,
+        keyboard_layout: None,
     };
     let attribution = EntryRef {
         key: format!("{}/{}/{}", scope, folder, entry),
@@ -7930,11 +7955,80 @@ mod tests {
     }
 
     #[test]
+    fn the_browser_keyboard_layout_fills_in_only_for_entries_without_one() {
+        let display = |layout: Option<&str>| EntryDisplay {
+            width: None,
+            height: None,
+            dpi: None,
+            keyboard_layout: browser_keyboard_layout(layout),
+        };
+        let rdp = |layout: Option<&str>| AddressBookEntry {
+            session_type: "rdp".into(),
+            hostname: Some("desktop".into()),
+            server_layout: layout.map(str::to_string),
+            ..Default::default()
+        };
+
+        // No layout on the entry: the browser's is used.
+        let req =
+            session_request_from_entry(rdp(None), display(Some("de-ch-qwertz")), None).unwrap();
+        assert_eq!(req.server_layout.as_deref(), Some("de-ch-qwertz"));
+        let req =
+            session_request_from_entry(rdp(Some("")), display(Some("de-ch-qwertz")), None).unwrap();
+        assert_eq!(
+            req.server_layout.as_deref(),
+            Some("de-ch-qwertz"),
+            "blank means server default"
+        );
+
+        // The entry's own layout wins.
+        let req = session_request_from_entry(
+            rdp(Some("en-gb-qwerty")),
+            display(Some("de-ch-qwertz")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(req.server_layout.as_deref(), Some("en-gb-qwerty"));
+
+        // VDI entries have no layout field, so they always take the browser's.
+        let vdi = AddressBookEntry {
+            session_type: "vdi".into(),
+            ..Default::default()
+        };
+        let req = session_request_from_entry(vdi, display(Some("fr-ch-qwertz")), None).unwrap();
+        assert_eq!(req.server_layout.as_deref(), Some("fr-ch-qwertz"));
+
+        // Nothing asked for: guacd's default, as before.
+        let req = session_request_from_entry(rdp(None), display(None), None).unwrap();
+        assert_eq!(req.server_layout, None);
+    }
+
+    #[test]
+    fn unknown_browser_keyboard_layouts_are_dropped() {
+        assert_eq!(
+            browser_keyboard_layout(Some("de-ch-qwertz")).as_deref(),
+            Some("de-ch-qwertz")
+        );
+        assert_eq!(
+            browser_keyboard_layout(Some(" failsafe ")).as_deref(),
+            Some("failsafe")
+        );
+        assert_eq!(browser_keyboard_layout(Some("klingon")), None);
+        assert_eq!(
+            browser_keyboard_layout(Some("de-ch-qwertz\nhostname")),
+            None
+        );
+        assert_eq!(browser_keyboard_layout(Some("")), None);
+        assert_eq!(browser_keyboard_layout(None), None);
+    }
+
+    #[test]
     fn an_adhoc_request_names_no_entry() {
         let display = EntryDisplay {
             width: Some(1024),
             height: Some(768),
             dpi: Some(96),
+            keyboard_layout: None,
         };
         let req = session_request_from_entry(full_entry("ssh"), display, None).unwrap();
         assert_eq!(req.address_book_entry, None);
@@ -7949,7 +8043,8 @@ mod tests {
             EntryDisplay {
                 width: None,
                 height: None,
-                dpi: None
+                dpi: None,
+                keyboard_layout: None,
             },
             None,
         )

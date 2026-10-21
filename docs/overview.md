@@ -97,6 +97,15 @@ Connects guacd to a target RDP server. Supports username/password, domain, and v
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) and [Kerberos NLA authentication](integrations.md#rdp-kerberos-nla-authentication).
 
+#### Keyboard layout
+
+RDP sends key positions, not characters, so guacd turns what you type into the key positions of the remote desktop's keyboard layout, and needs to know that layout. Left at its US default, a desktop set up for Swiss German swaps Y and Z and loses its umlauts. There are two places to set it:
+
+- **On the connection:** **Keyboard layout** in the entry's RDP settings, for a connection everyone uses with the same keyboard.
+- **For yourself:** **Settings > My keyboard layout** on the Connections page, when the desktops you use are set up for the same layout as your keyboard. It's remembered in that browser and used for any RDP connection left at "Server default", and for VDI desktops.
+
+A layout set on the connection wins. With neither set, guacd uses US English.
+
 ### VNC
 
 Connects guacd to a target VNC server. Supports password-based authentication, plus username + password for servers that require it (VeNCrypt, RealVNC, macOS Screen Sharing). Useful for accessing existing VNC servers on the network (e.g., KVM/IPMI consoles, remote desktops, virtual machine displays).

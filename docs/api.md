@@ -213,6 +213,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `url` | string | Web | Target URL for web browser session |
 | `domain` | string | RDP | Windows domain |
 | `security` | string | RDP | `tls`, `nla`, or `rdp` |
+| `server_layout` | string | RDP | Keyboard layout, a guacd keymap name such as `de-ch-qwertz` (see [keyboard layout](overview.md#keyboard-layout)). Default: guacd's, US English |
 | `ignore_cert` | boolean | RDP | Ignore TLS certificate errors |
 | `auth_pkg` | string | RDP | NLA auth package: `kerberos`, `ntlm`, or empty (negotiate) |
 | `kdc_url` | string | RDP | Kerberos KDC or KDC Proxy URL |
@@ -538,9 +539,12 @@ Optional body to override or supply credentials at connect time:
   "banner": "Custom banner message",
   "width": 1920,
   "height": 1080,
-  "dpi": 96
+  "dpi": 96,
+  "keyboard_layout": "de-ch-qwertz"
 }
 ```
+
+`keyboard_layout` is the connecting user's own keyboard (**Settings > My keyboard layout** in the UI). It applies to RDP entries with no `server_layout` of their own, and to VDI desktops. A name guacd doesn't know is ignored.
 
 Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the Vault entry and cannot be overridden at connect time.
 
@@ -569,7 +573,7 @@ Connect to a host that is not a saved entry (an ad-hoc connection), described wi
 
 - `entry` takes the same fields as [creating an entry](#post-apiaddressbookfoldersscopefolderentries-admin), in the same form. Its name, display name and folder are not used. Legacy single jump host fields are accepted, as on entries.
 - `generate_keypair` (SSH): generate an ephemeral Ed25519 keypair, as with `POST /api/sessions`.
-- `width`, `height`, `screen_width`, `screen_height`, `dpi`: as for the entry connect endpoint above.
+- `width`, `height`, `screen_width`, `screen_height`, `dpi`, `keyboard_layout`: as for the entry connect endpoint above.
 - [Credential variables](credential-variables.md) (`$name` in `username`, `password`, `domain`, `private_key`) are resolved from the **caller's own** My Credentials, server side; values are never returned. A variable the caller has not set returns `412` with `{"error": "missing credential variables", "missing_variables": ["name"]}`. An API key has no credential variables, so a request from one that uses them returns `400`. Without Vault, references are not resolved.
 - [Folder default credentials](credential-variables.md#folder-default-credentials) never apply: an ad-hoc connection belongs to no folder.
 - Requests from non-admins get the [ad-hoc policy](#post-apisessions) (network allowlists on every target, including SPICE, Proxmox and jump hosts; entry-only options ignored; site recording, drive and VDI limits).
@@ -645,6 +649,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `url` | string | Web | Target URL |
 | `domain` | string | RDP | Windows domain |
 | `security` | string | RDP | Security mode |
+| `server_layout` | string | RDP | Keyboard layout, a guacd keymap name such as `de-ch-qwertz`. Empty uses the connecting user's own layout if they have set one, otherwise guacd's default (US English) |
 | `ignore_cert` | boolean | RDP | Ignore certificate errors |
 | `auth_pkg` | string | RDP | NLA auth package |
 | `kdc_url` | string | RDP | Kerberos KDC URL |

@@ -669,6 +669,12 @@
                 <div class="um-section-label">Theme</div>
                 <div id="um-theme-list"></div>
                 <div class="um-divider"></div>
+                <div class="um-section-label">My keyboard layout</div>
+                <div class="um-kb" id="um-kb">
+                    <select id="um-kb-layout" aria-label="My keyboard layout"></select>
+                    <div class="um-kb-hint">For RDP and desktop connections that don't set their own. Remembered in this browser.</div>
+                </div>
+                <div class="um-divider"></div>
                 <div class="um-item" id="my-creds-item">&#128273; My Credentials</div>
                 <div class="um-item" id="show-tour-item">&#9432; Welcome Tour</div>
             </div>
@@ -900,16 +906,25 @@
                         <option value="">Server default (US)</option>
                         <option value="en-us-qwerty">English (US)</option>
                         <option value="en-gb-qwerty">English (UK)</option>
-                        <option value="de-de-qwertz">German</option>
-                        <option value="de-ch-qwertz">German (Swiss)</option>
+                        <option value="cs-cz-qwertz">Czech</option>
+                        <option value="da-dk-qwerty">Danish</option>
                         <option value="fr-fr-azerty">French</option>
                         <option value="fr-be-azerty">French (Belgian)</option>
+                        <option value="fr-ca-qwerty">French (Canadian)</option>
                         <option value="fr-ch-qwertz">French (Swiss)</option>
+                        <option value="de-de-qwertz">German</option>
+                        <option value="de-ch-qwertz">German (Swiss)</option>
+                        <option value="hu-hu-qwertz">Hungarian</option>
                         <option value="it-it-qwerty">Italian</option>
-                        <option value="es-es-qwerty">Spanish</option>
-                        <option value="pt-br-qwerty">Portuguese (Brazilian)</option>
-                        <option value="sv-se-qwerty">Swedish</option>
                         <option value="ja-jp-qwerty">Japanese</option>
+                        <option value="no-no-qwerty">Norwegian</option>
+                        <option value="pl-pl-qwerty">Polish</option>
+                        <option value="pt-pt-qwerty">Portuguese</option>
+                        <option value="pt-br-qwerty">Portuguese (Brazilian)</option>
+                        <option value="ro-ro-qwerty">Romanian</option>
+                        <option value="es-es-qwerty">Spanish</option>
+                        <option value="es-latam-qwerty">Spanish (Latin American)</option>
+                        <option value="sv-se-qwerty">Swedish</option>
                         <option value="tr-tr-qwerty">Turkish-Q</option>
                         <option value="failsafe">Failsafe (Unicode)</option>
                     </select>
@@ -1461,6 +1476,33 @@
         var _themePresets={},_adminPreset='aurora';
         var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
         function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
+        // The keyboard on this device, sent with each connect so an RDP or
+        // desktop connection without a layout of its own types correctly.
+        // Per browser, like the theme: it describes the hardware.
+        function rgKeyboardLayout() {
+            try { return localStorage.getItem('rustguac_keyboard_layout') || undefined; } catch (e) { return undefined; }
+        }
+        (function() {
+            var sel = document.getElementById('um-kb-layout');
+            var src = document.getElementById('em-rdp-layout');
+            if (!sel || !src) return;
+            Array.prototype.forEach.call(src.options, function(o) {
+                var opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.value ? o.textContent : 'Not set (server default)';
+                sel.appendChild(opt);
+            });
+            sel.value = rgKeyboardLayout() || '';
+            if (sel.selectedIndex < 0) sel.value = '';
+            // Clicks bubble to the document handler that closes the menu.
+            document.getElementById('um-kb').addEventListener('click', function(e) { e.stopPropagation(); });
+            sel.addEventListener('change', function() {
+                try {
+                    if (sel.value) localStorage.setItem('rustguac_keyboard_layout', sel.value);
+                    else localStorage.removeItem('rustguac_keyboard_layout');
+                } catch (e) {}
+            });
+        })();
         var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         var _driveConfigured = false;
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
@@ -1778,7 +1820,7 @@
                 method: 'POST',
                 headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                 credentials: 'same-origin',
-                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height })
+                body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height, keyboard_layout: rgKeyboardLayout() })
             })
             .then(function(res) { return res.json(); })
             .then(function(data) {
@@ -2088,7 +2130,7 @@
                                     method: 'POST',
                                     headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
                                     credentials: 'same-origin',
-                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height })
+                                    body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, screen_width: screen.width, screen_height: screen.height, keyboard_layout: rgKeyboardLayout() })
                                 }).then(function(res) { return res.json(); }).then(function(data) {
                                     if (data.session_id) window.open('/client/' + data.session_id, '_blank');
                                     else showError(data.error || 'Failed to reconnect');
@@ -3427,6 +3469,7 @@
                 body.height = bh;
             }
             if (!body.dpi) body.dpi = Math.round((window.devicePixelRatio || 1) * 96);
+            if (!body.keyboard_layout) body.keyboard_layout = rgKeyboardLayout();
             (popup ? popup.size : Promise.resolve(null)).then(function(sz) {
                 if (sz) { body.width = sz.width; body.height = sz.height; }
                 return fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(name) + '/connect', {
@@ -5269,6 +5312,7 @@
                 body.screen_height = screen.height;
             }
             body.dpi = Math.round((window.devicePixelRatio || 1) * 96);
+            body.keyboard_layout = rgKeyboardLayout();
             // Opened inside the click so it is not popup-blocked (see doConnect).
             var targetWin = window.open('', '_blank');
             errEl.textContent = '';

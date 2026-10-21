@@ -1171,3 +1171,6 @@ html:not([data-role-level="4"]) .admin-only { display: none !important; }
     opacity: 0.35; transition: opacity 0.15s;
 }
 .rg-session-btn:hover { opacity: 1; background: var(--surface, #16213e); border-color: var(--primary, #e94560); color: var(--text, #e0e0e0); }
+.um-kb { padding: 0 var(--s-3) var(--s-2); }
+.um-kb select { width: 100%; }
+.um-kb-hint { margin-top: var(--s-1); font-size: var(--fz-xs); color: var(--text-dim); }
