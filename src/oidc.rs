@@ -186,6 +186,14 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(10));
 
+    if config.allow_unverified_email {
+        tracing::warn!(
+            "OIDC allow_unverified_email = true: logins are accepted even when the provider \
+             says the email is unverified. A user who has never logged in can be claimed by \
+             anyone the provider gives that email; turn off self-service email changes there."
+        );
+    }
+
     if config.tls_skip_verify {
         tracing::warn!(
             "OIDC TLS certificate verification is DISABLED (tls_skip_verify = true). \
@@ -473,8 +481,17 @@ pub async fn callback(
     // Users are found by email, so an email the provider itself says it has
     // not verified is not good enough to log anyone in. Providers that do not
     // send the claim at all are trusted as before.
-    if claims.email().is_some() && claims.email_verified() == Some(false) {
-        tracing::warn!("OIDC login rejected: the provider marked the email as unverified");
+    if refuse_unverified_email(
+        claims.email().is_some(),
+        claims.email_verified(),
+        oidc.config.allow_unverified_email,
+    ) {
+        tracing::warn!(
+            "OIDC login rejected: the provider marked the email as unverified \
+             (email_verified = false). If the provider sends false for everyone, as \
+             authentik's default email mapping does, fix the mapping or set \
+             [oidc] allow_unverified_email = true; see docs/integrations.md"
+        );
         return Redirect::to("/?sso_error=email_unverified").into_response();
     }
 
@@ -701,6 +718,13 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     out
 }
 
+/// Whether a login is refused because the provider says the email is not
+/// verified. Only an explicit `false` counts, and only when there is an email
+/// to match on; `allow` (`[oidc] allow_unverified_email`) lets it through.
+fn refuse_unverified_email(has_email: bool, verified: Option<bool>, allow: bool) -> bool {
+    has_email && verified == Some(false) && !allow
+}
+
 /// `alg` and `kid` from a JWT's (unverified) header, for diagnostics only.
 fn jwt_header_alg_kid(token_str: &str) -> (Option<String>, Option<String>) {
     use base64::Engine;
@@ -914,6 +938,28 @@ fn parse_issuer_mismatch(raw: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_an_explicitly_unverified_email_is_refused_unless_allowed() {
+        use super::refuse_unverified_email as refuse;
+        assert!(
+            refuse(true, Some(false), false),
+            "email_verified: false is refused by default"
+        );
+        assert!(
+            !refuse(true, Some(false), true),
+            "allow_unverified_email lets it through"
+        );
+        assert!(!refuse(true, Some(true), false));
+        assert!(
+            !refuse(true, None, false),
+            "a provider that sends no claim is trusted"
+        );
+        assert!(
+            !refuse(false, Some(false), false),
+            "no email, nothing to match on"
+        );
+    }
+
     #[test]
     fn jwt_header_fields_are_read() {
         // {"alg":"RS256","kid":"abc123","typ":"JWT"}

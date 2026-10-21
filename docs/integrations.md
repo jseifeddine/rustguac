@@ -80,9 +80,30 @@ Authentik does not ship a `groups` scope mapping by default, so the `groups` sco
   }
   ```
 
-This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by rustguac for group-to-role mapping (step 6).
+This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by rustguac for group-to-role mapping (step 7).
 
-**2. Create a provider** in Authentik:
+**2. Create an `email` scope mapping that marks the email verified:**
+
+Authentik's default `email` mapping sends `"email_verified": False` for every user, and rustguac refuses a login whose email the provider says is unverified (see [How a login is matched to a user](roles-and-access-control.md#how-a-login-is-matched-to-a-user)). Without this step every login fails with "Your identity provider says your email address is not verified".
+
+- Go to **Customisation > Property Mappings > Create**
+- Type: **Scope Mapping** (under OAuth2/OpenID)
+- Name: `rustguac email (verified)`
+- Scope name: `email`
+- Expression:
+
+  ```python
+  return {
+      "email": request.user.email,
+      "email_verified": True,
+  }
+  ```
+
+This tells rustguac the address can be trusted, so only use it if your users can't change their own email in Authentik. Check **System > Settings > Allow users to change email** is off, or that every account's email is set by an admin or a trusted source such as your directory.
+
+If you can't change the mapping, `allow_unverified_email = true` under `[oidc]` in rustguac's config accepts the logins instead, with the same caveat.
+
+**3. Create a provider** in Authentik:
 
 - Go to **Applications > Providers > Create**
 - Select **OAuth2/OpenID Connect**
@@ -91,9 +112,9 @@ This creates a `groups` claim in the ID token containing the user's Authentik gr
 - Client type: **Confidential**
 - Redirect URIs: `https://your-rustguac-host/auth/callback`
 - Under **Advanced protocol settings**:
-  - Scopes: ensure `openid`, `email`, `profile`, **and the `rustguac groups` mapping you created in step 1** are selected
+  - Scopes: select `openid` and `profile`, **the `rustguac email (verified)` mapping from step 2 instead of the default `email` one**, and the `rustguac groups` mapping from step 1
 
-**3. Create an application:**
+**4. Create an application:**
 
 - Go to **Applications > Applications > Create**
 - Name: `rustguac`
@@ -101,12 +122,12 @@ This creates a `groups` claim in the ID token containing the user's Authentik gr
 - Provider: select the provider you just created
 - Launch URL: `https://your-rustguac-host/`
 
-**4. Note the provider details:**
+**5. Note the provider details:**
 
 - Go back to the provider and note the **Client ID** and **Client Secret**
 - The **OpenID Configuration Issuer** will be: `https://authentik.example.com/application/o/rustguac/`
 
-**5. Configure rustguac:**
+**6. Configure rustguac:**
 
 ```toml
 [oidc]
@@ -124,7 +145,7 @@ chmod 600 /opt/rustguac/env
 sudo systemctl restart rustguac
 ```
 
-**6. (Optional) Set up group-to-role mappings:**
+**7. (Optional) Set up group-to-role mappings:**
 
 Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and assign users to them. Then configure group-to-role mappings in the rustguac Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
 

@@ -65,7 +65,9 @@ Users are found by email, but an email on its own is not proof of who someone is
 
 A user an admin added who has not logged in yet has no subject, so their first login records it.
 
-rustguac also refuses a login when the provider explicitly marks the email as unverified (`email_verified: false`). Providers that do not send the claim are trusted as before.
+rustguac also refuses a login when the provider explicitly marks the email as unverified (`email_verified: false`), with "Your identity provider says your email address is not verified" on the login page and a warning in the log. Providers that do not send the claim are trusted as before.
+
+Some providers send `false` for everyone. authentik's default `email` mapping does, so every login is refused until the mapping is changed; the [Authentik setup guide](integrations.md#authentik-setup-guide) has a mapping that marks it verified. Where the provider can't be changed, `allow_unverified_email = true` under `[oidc]` accepts these logins. Only do that if users can't set their own email at the provider: a user an admin added who has never logged in has no subject yet, so whoever the provider gives that email first gets the account. rustguac logs a warning at startup while it is on.
 
 #### Moving to a different identity provider
 

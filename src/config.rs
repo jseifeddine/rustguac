@@ -31,6 +31,12 @@ pub struct OidcConfig {
     /// `POST /api/users` or the Admin page) can log in.
     #[serde(default = "default_true")]
     pub auto_create_users: bool,
+    /// Let a login through when the provider marks the email unverified
+    /// (`email_verified: false`). Default false. For providers that send
+    /// false for every user, like authentik's default `email` mapping;
+    /// logins are then matched on the recorded subject as usual.
+    #[serde(default)]
+    pub allow_unverified_email: bool,
     /// Name of the OIDC claim containing group memberships (default: "groups").
     #[serde(default = "default_groups_claim")]
     pub groups_claim: String,
@@ -59,6 +65,7 @@ impl std::fmt::Debug for OidcConfig {
             .field("redirect_uri", &self.redirect_uri)
             .field("default_role", &self.default_role)
             .field("auto_create_users", &self.auto_create_users)
+            .field("allow_unverified_email", &self.allow_unverified_email)
             .field("groups_claim", &self.groups_claim)
             .field("extra_scopes", &self.extra_scopes)
             .field("tls_skip_verify", &self.tls_skip_verify)
@@ -1708,6 +1715,7 @@ mod tests {
             redirect_uri: "https://console.example.com/oidc/callback".into(),
             default_role: default_oidc_default_role(),
             auto_create_users: true,
+            allow_unverified_email: false,
             groups_claim: default_groups_claim(),
             extra_scopes: vec![],
             tls_skip_verify: false,
