@@ -201,6 +201,8 @@ pub async fn cmd_import_guacamole(
             // A Guacamole dump is a one-off import, not a sync source.
             external_id: None,
             protocols: None,
+            allowed_groups: None,
+            allowed_users: None,
         };
 
         if !cred_maps.is_empty()

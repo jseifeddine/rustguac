@@ -19,7 +19,7 @@ function multi() {
         settings: { hostname: '10.0.0.10', display_name: 'srv01 (DC1)', username: 'Administrator', has_password: true },
         protocols: [
             { ...rdp, protocol: 'rdp', settings: { port: 3389 } },
-            { ...ssh, protocol: 'ssh', settings: { port: 2222, username: 'admin' } }
+            { ...ssh, protocol: 'ssh', settings: { port: 2222, username: 'admin' }, allowed_groups: ['netops'] }
         ]
     };
 }
@@ -236,7 +236,7 @@ test('editing an old single-protocol entry saves it as one protocol, host fields
     expect(JSON.stringify(body)).not.toContain('has_password');
 });
 
-test('adding a protocol and making it primary', async ({ page }) => {
+test('adding a protocol, with its own access rule, and making it primary', async ({ page }) => {
     const api = await installApi(page, { folders: folders() });
     await openAcme(page);
     await page.locator('button[data-edit-entry="web01"]').click();
@@ -244,13 +244,16 @@ test('adding a protocol and making it primary', async ({ page }) => {
     await expect(page.locator('#em-type')).toHaveValue('rdp');
     await expect(page.locator('#em-type')).toBeEnabled();
     await page.locator('#em-rdp-port').fill('3390');
+    await page.locator('#em-proto-own-rule').check();
+    await page.locator('#em-proto-groups').fill('windows-admins, ops');
     await page.locator('#em-proto-primary').click();
     await expect(page.locator('#em-proto-tabs .em-proto-tab')).toHaveText(['★ rdp', 'ssh', '+ Add protocol']);
     await page.locator('#em-save').click();
     await expect.poll(() => api.calls.find(c => c.method === 'PUT' && /entries\/web01$/.test(c.path))).toBeTruthy();
     const body = api.calls.find(c => c.method === 'PUT' && /entries\/web01$/.test(c.path)).body;
     expect(body.protocols.map(p => p.type)).toEqual(['rdp', 'ssh']);
-    expect(body.protocols[0]).toMatchObject({ type: 'rdp', port: 3390 });
+    expect(body.protocols[0]).toMatchObject({ port: 3390, allowed_groups: ['windows-admins', 'ops'], allowed_users: [] });
+    expect(body.protocols[1].allowed_groups).toBeUndefined();
 });
 
 test('the multi-protocol editor loads each protocol with the host as its defaults', async ({ page }) => {
@@ -265,6 +268,8 @@ test('the multi-protocol editor loads each protocol with the host as its default
     await expect(page.locator('#em-type')).toHaveValue('ssh');
     await expect(page.locator('#em-username')).toHaveValue('admin');
     await expect(page.locator('#em-port')).toHaveValue('2222');
+    await expect(page.locator('#em-proto-own-rule')).toBeChecked();
+    await expect(page.locator('#em-proto-groups')).toHaveValue('netops');
 });
 
 test('the Type filter matches any of an entry\'s protocols', async ({ page }) => {

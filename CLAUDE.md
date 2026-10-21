@@ -63,13 +63,15 @@ Vault KV v2 path structure:
 - `<base_path>/users/<sanitized_email>` — per-user credential variables
 
 Entries (#296, `src/entry_protocols.rs`): either the old flat form (top-level
-`type`) or host fields + `protocols: [{type, name?, overrides...}]`, first = primary. A protocol inherits host fields it does not
+`type`) or host fields + `protocols: [{type, name?, overrides..., allowed_groups?,
+allowed_users?}]`, first = primary. A protocol inherits host fields it does not
 set (`""`/`[]` clears; `port` is never inherited). `pick_protocol` /
 `effective_of` resolve host+protocol to a flat single-type entry, which the
 connect path uses unchanged. A flat entry is read as one protocol (`split`; the
 host keeps `HOST_KEYS`), and `compact()` stores the flat form whenever that is
-lossless, so older instances keep reading it. Updates keep secrets per protocol,
-matched by name (or `renamed_from`).
+lossless, so older instances keep reading it. Entry/protocol ACLs only narrow
+folder access; `EntryInfo::for_viewer` filters listings. Updates keep secrets
+per protocol, matched by name (or `renamed_from`).
 
 #### Multiple Vault backends (DR)
 

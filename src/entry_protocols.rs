@@ -42,7 +42,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::vault::AddressBookEntry;
+use crate::vault::{AddressBookEntry, FolderSubject};
 
 /// Session types a protocol may have.
 pub const PROTOCOL_TYPES: &[&str] = &["ssh", "rdp", "vnc", "spice", "proxmox", "web", "vdi"];
@@ -63,6 +63,8 @@ pub const HOST_KEYS: &[&str] = &[
     "wol_broadcast_addr",
     "wol_udp_port",
     "wol_wait_time",
+    "allowed_groups",
+    "allowed_users",
 ];
 
 /// Fields that hold a secret. They are kept on update when the request
@@ -84,14 +86,21 @@ pub struct ProtocolEntry {
     #[serde(rename = "type")]
     pub session_type: String,
     /// Tells two protocols of the same type apart (`ssh` and `ssh-2222`).
-    /// Defaults to the type; unique within the entry. The connect API,
-    /// updates and sessions refer to a protocol by it.
+    /// Defaults to the type; unique within the entry. The connect API, access
+    /// rules, updates and sessions refer to a protocol by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Write-only, in an update: the name this protocol had before, so its
     /// stored secrets follow it to the new name. Never stored or returned.
     #[serde(default, skip_serializing)]
     pub renamed_from: Option<String>,
+    /// Who may use this protocol. Unset inherits the host's rule; set (even
+    /// empty) replaces it, and an empty rule admits everyone who can open
+    /// the folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_groups: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_users: Option<Vec<String>>,
     /// Every other field, as stored: any entry field, overriding the host's.
     #[serde(flatten)]
     pub settings: Map<String, Value>,
@@ -105,6 +114,55 @@ impl ProtocolEntry {
             .filter(|n| !n.is_empty())
             .unwrap_or(&self.session_type)
     }
+
+    /// Whether the protocol has an access rule of its own.
+    fn has_own_rule(&self) -> bool {
+        self.allowed_groups.is_some() || self.allowed_users.is_some()
+    }
+}
+
+/// Whether `rule` (groups and users, as in a folder `.config`) admits `who`.
+fn rule_grants(groups: &[String], users: &[String], who: FolderSubject<'_>) -> bool {
+    if groups.iter().any(|g| who.groups.iter().any(|ug| ug == g)) {
+        return true;
+    }
+    match who.email.map(str::trim) {
+        Some(email) if !email.is_empty() => {
+            users.iter().any(|u| u.trim().eq_ignore_ascii_case(email))
+        }
+        _ => false,
+    }
+}
+
+fn slice(v: &Option<Vec<String>>) -> &[String] {
+    v.as_deref().unwrap_or(&[])
+}
+
+/// Whether `who` may use `protocol` of an entry whose host is `host`. The
+/// caller has already checked the folder, which stays the boundary: these
+/// rules only narrow it.
+///
+/// The protocol's own rule wins when it has one; otherwise the host's rule
+/// applies when it has one; otherwise everyone who can open the folder may.
+/// `who` is `None` for an admin, who may use everything.
+pub fn protocol_allowed(
+    host: &AddressBookEntry,
+    protocol: &ProtocolEntry,
+    who: Option<FolderSubject<'_>>,
+) -> bool {
+    let Some(who) = who else { return true };
+    if protocol.has_own_rule() {
+        let (g, u) = (
+            slice(&protocol.allowed_groups),
+            slice(&protocol.allowed_users),
+        );
+        return (g.is_empty() && u.is_empty()) || rule_grants(g, u, who);
+    }
+    let (g, u) = (slice(&host.allowed_groups), slice(&host.allowed_users));
+    if g.is_empty() && u.is_empty() {
+        return true;
+    }
+    rule_grants(g, u, who)
 }
 
 /// Drop JSON nulls: an absent field and a null one mean the same (inherit).
@@ -198,7 +256,7 @@ impl AddressBookEntry {
     }
 
     /// Write in the old single-protocol form when nothing would be lost by
-    /// it: one protocol, without a name of its own, whose
+    /// it: one protocol, without a name of its own or any access rule, whose
     /// fields and the host's fall exactly where [`split`] would put them back.
     /// Such an entry stays readable by instances that predate `protocols`.
     /// Anything else is returned as it is.
@@ -214,6 +272,9 @@ impl AddressBookEntry {
         if p.name
             .as_deref()
             .is_some_and(|n| !n.is_empty() && n != p.session_type)
+            || p.has_own_rule()
+            || self.allowed_groups.is_some()
+            || self.allowed_users.is_some()
             || p.session_type.is_empty()
         {
             return self;
@@ -301,28 +362,40 @@ impl AddressBookEntry {
         Ok(())
     }
 
-    /// The protocol for `requested` (`None` for the primary): its name and
-    /// its effective entry. A name that matches no protocol is tried as a
-    /// type, so a link that names the type of a single-protocol entry
-    /// (`&protocol=rdp`) keeps working.
-    pub fn pick_protocol(&self, requested: Option<&str>) -> Option<(String, AddressBookEntry)> {
+    /// The protocol `who` should get for `requested` (`None` for the first
+    /// they may use, which is the primary unless it is closed to them): the
+    /// protocol's name and its effective entry. A name that matches no
+    /// protocol is tried as a type, so a link that names the type of a
+    /// single-protocol entry (`&protocol=rdp`) keeps working. A protocol
+    /// `who` may not use is reported as missing, so it does not show.
+    pub fn pick_protocol(
+        &self,
+        requested: Option<&str>,
+        who: Option<FolderSubject<'_>>,
+    ) -> Option<(String, AddressBookEntry)> {
         let (host, protocols) = self.split();
+        let allowed = |p: &&ProtocolEntry| protocol_allowed(&host, p, who);
         let p = match requested.map(str::trim).filter(|r| !r.is_empty()) {
-            None => protocols.first(),
+            None => protocols.iter().find(allowed),
             Some(r) => protocols
                 .iter()
                 .find(|p| p.name() == r)
-                .or_else(|| protocols.iter().find(|p| p.session_type == r)),
+                .or_else(|| protocols.iter().find(|p| p.session_type == r))
+                .filter(allowed),
         }?;
         let eff = effective_of(&host, p).ok()?;
         Some((p.name().to_string(), eff))
     }
 
-    /// Every protocol with its effective entry, in order.
-    pub fn visible_protocols(&self) -> Vec<(ProtocolEntry, AddressBookEntry)> {
+    /// The protocols `who` may use, with their effective entries, in order.
+    pub fn visible_protocols(
+        &self,
+        who: Option<FolderSubject<'_>>,
+    ) -> Vec<(ProtocolEntry, AddressBookEntry)> {
         let (host, protocols) = self.split();
         protocols
             .into_iter()
+            .filter(|p| protocol_allowed(&host, p, who))
             .filter_map(|p| effective_of(&host, &p).ok().map(|e| (p, e)))
             .collect()
     }
@@ -344,7 +417,13 @@ pub fn effective_of(
     protocol: &ProtocolEntry,
 ) -> Result<AddressBookEntry, String> {
     let mut m = to_map(host);
-    for k in ["protocols", "type", "port"] {
+    for k in [
+        "protocols",
+        "allowed_groups",
+        "allowed_users",
+        "type",
+        "port",
+    ] {
         m.remove(k);
     }
     for (k, v) in &protocol.settings {
@@ -358,6 +437,8 @@ pub fn effective_of(
         serde_json::from_value(Value::Object(m)).map_err(|e| e.to_string())?;
     e.normalize_jump_hosts();
     e.protocols = None;
+    e.allowed_groups = None;
+    e.allowed_users = None;
     Ok(e)
 }
 
@@ -397,7 +478,7 @@ pub fn keep_secrets(new: &mut Map<String, Value>, old: &Map<String, Value>) {
 /// admin's editor may see them: every secret replaced by a `has_<field>`
 /// flag (an empty one, which clears an inherited secret, is kept as it is),
 /// jump hosts without their credentials and with the host key as its
-/// fingerprint. For admins only.
+/// fingerprint. For admins only: it shows the access rules.
 pub fn editor_settings(settings: &Map<String, Value>) -> Value {
     let mut out = Map::new();
     for (k, v) in settings {
@@ -463,7 +544,7 @@ pub fn editor_settings(settings: &Map<String, Value>) -> Value {
 /// The host's own fields, for [`editor_settings`].
 pub fn host_settings(host: &AddressBookEntry) -> Map<String, Value> {
     let mut m = to_map(host);
-    for k in ["protocols", "type"] {
+    for k in ["protocols", "type", "allowed_groups", "allowed_users"] {
         m.remove(k);
     }
     m
@@ -476,6 +557,10 @@ mod tests {
 
     fn entry(v: Value) -> AddressBookEntry {
         serde_json::from_value(v).unwrap()
+    }
+
+    fn who<'a>(email: Option<&'a str>, groups: &'a [String]) -> FolderSubject<'a> {
+        FolderSubject { email, groups }
     }
 
     /// An entry in the old single-protocol form with every kind of field.
@@ -566,6 +651,14 @@ mod tests {
         let cleared =
             entry(json!({"hostname": "h", "protocols": [{"type": "web", "hostname": ""}]}));
         assert!(cleared.compact().has_protocol_list());
+        // Access rules, which an older instance would ignore.
+        let acl = entry(
+            json!({"hostname": "h", "allowed_groups": ["ops"], "protocols": [{"type": "ssh"}]}),
+        );
+        assert!(acl.compact().has_protocol_list());
+        let pacl =
+            entry(json!({"hostname": "h", "protocols": [{"type": "ssh", "allowed_users": []}]}));
+        assert!(pacl.compact().has_protocol_list());
         // A name of its own.
         let named =
             entry(json!({"hostname": "h", "protocols": [{"type": "ssh", "name": "ssh-alt"}]}));
@@ -646,18 +739,116 @@ mod tests {
         }
     }
 
+    /// Matt's table on #296: a host rule and a protocol rule, each allowing
+    /// or denying the user. The entry also has a protocol without a rule of
+    /// its own, which follows the host. The host is visible when any
+    /// protocol is.
+    #[test]
+    fn host_and_protocol_rules_follow_the_table() {
+        let groups = vec!["ops".to_string()];
+        let me = who(Some("me@example.com"), &groups);
+        let rule = |allow: bool| {
+            if allow {
+                json!(["ops"])
+            } else {
+                json!(["finance"])
+            }
+        };
+        for (host_allow, proto_allow, host_visible, proto_visible) in [
+            (true, true, true, true),
+            (true, false, true, false),
+            (false, true, true, true),
+            (false, false, false, false),
+        ] {
+            let e = entry(json!({
+                "hostname": "h", "allowed_groups": rule(host_allow),
+                "protocols": [
+                    {"type": "ssh", "allowed_groups": rule(proto_allow)},
+                    {"type": "rdp"}
+                ]
+            }));
+            let visible: Vec<String> = e
+                .visible_protocols(Some(me))
+                .into_iter()
+                .map(|(p, _)| p.name().to_string())
+                .collect();
+            let case = format!("host {host_allow} proto {proto_allow}");
+            assert_eq!(!visible.is_empty(), host_visible, "host visible: {case}");
+            assert_eq!(
+                visible.contains(&"ssh".to_string()),
+                proto_visible,
+                "{case}"
+            );
+            assert_eq!(
+                visible.contains(&"rdp".to_string()),
+                host_allow,
+                "inherits: {case}"
+            );
+            assert_eq!(
+                e.pick_protocol(Some("ssh"), Some(me)).is_some(),
+                proto_visible,
+                "{case}"
+            );
+            // An admin sees and may use everything.
+            assert_eq!(e.visible_protocols(None).len(), 2);
+            assert!(e.pick_protocol(Some("ssh"), None).is_some());
+        }
+    }
+
+    #[test]
+    fn rules_inherit_from_the_host_and_then_the_folder() {
+        let none: Vec<String> = vec![];
+        let ops = vec!["ops".to_string()];
+        let alice = who(Some("Alice@Example.com"), &none);
+        let bob = who(Some("bob@example.com"), &ops);
+        // No rule anywhere: everyone who can open the folder.
+        let open = entry(json!({"hostname": "h", "protocols": [{"type": "ssh"}]}));
+        assert_eq!(open.visible_protocols(Some(alice)).len(), 1);
+        // Host rule by user, matched without regard to case; protocols inherit it.
+        let host_rule = entry(
+            json!({"hostname": "h", "allowed_users": ["alice@example.com"],
+            "protocols": [{"type": "ssh"}, {"type": "rdp"}]}),
+        );
+        assert_eq!(host_rule.visible_protocols(Some(alice)).len(), 2);
+        assert_eq!(host_rule.visible_protocols(Some(bob)).len(), 0);
+        // An empty rule of its own opens a protocol to the whole folder.
+        let reopened = entry(
+            json!({"hostname": "h", "allowed_users": ["alice@example.com"],
+            "protocols": [{"type": "ssh"}, {"type": "web", "allowed_groups": [], "allowed_users": []}]}),
+        );
+        let bob_sees: Vec<String> = reopened
+            .visible_protocols(Some(bob))
+            .into_iter()
+            .map(|(p, _)| p.name().to_string())
+            .collect();
+        assert_eq!(bob_sees, ["web"]);
+        // The primary is the first protocol the user may use.
+        let (name, eff) = reopened.pick_protocol(None, Some(bob)).unwrap();
+        assert_eq!((name.as_str(), eff.session_type.as_str()), ("web", "web"));
+        let (name, _) = reopened.pick_protocol(None, Some(alice)).unwrap();
+        assert_eq!(name, "ssh");
+        // A legacy entry has no rules: unchanged access.
+        assert!(entry(legacy_rdp()).pick_protocol(None, Some(bob)).is_some());
+    }
+
     #[test]
     fn pick_protocol_falls_back_from_name_to_type() {
         let e = entry(json!({"hostname": "h", "protocols": [
             {"type": "ssh", "name": "ssh-2222", "port": 2222}, {"type": "rdp"}]}));
-        assert_eq!(e.pick_protocol(Some("ssh-2222")).unwrap().0, "ssh-2222");
-        assert_eq!(e.pick_protocol(Some("ssh")).unwrap().0, "ssh-2222");
-        assert_eq!(e.pick_protocol(Some("rdp")).unwrap().0, "rdp");
-        assert_eq!(e.pick_protocol(Some("")).unwrap().0, "ssh-2222");
-        assert!(e.pick_protocol(Some("vnc")).is_none());
+        assert_eq!(
+            e.pick_protocol(Some("ssh-2222"), None).unwrap().0,
+            "ssh-2222"
+        );
+        assert_eq!(e.pick_protocol(Some("ssh"), None).unwrap().0, "ssh-2222");
+        assert_eq!(e.pick_protocol(Some("rdp"), None).unwrap().0, "rdp");
+        assert_eq!(e.pick_protocol(Some(""), None).unwrap().0, "ssh-2222");
+        assert!(e.pick_protocol(Some("vnc"), None).is_none());
         // An old quick link naming the type of a single-protocol entry.
         assert_eq!(
-            entry(legacy_rdp()).pick_protocol(Some("rdp")).unwrap().0,
+            entry(legacy_rdp())
+                .pick_protocol(Some("rdp"), None)
+                .unwrap()
+                .0,
             "rdp"
         );
     }

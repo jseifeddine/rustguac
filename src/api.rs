@@ -2634,6 +2634,16 @@ pub async fn get_docs() -> impl IntoResponse {
     Json(json!(sections))
 }
 
+/// Who is asking, for the entry and protocol access rules (#296): `None`
+/// for an admin, who may use every protocol.
+fn entry_viewer(id: &AuthIdentity) -> Option<crate::vault::FolderSubject<'_>> {
+    if id.has_role("admin") {
+        None
+    } else {
+        Some(id.folder_subject())
+    }
+}
+
 /// Helper: check if the identity has group access to a folder, honouring
 /// `inherit_from_parent` on the folder's config (a subfolder may inherit
 /// access from any ancestor whose `allowed_groups` matches the caller's
@@ -3597,11 +3607,12 @@ pub async fn ab_list_all(
         let mut entries = Vec::new();
         for name in &entry_names {
             if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
+                // Only the protocols the caller may use; none hides the entry.
                 let Some(info) = crate::vault::EntryInfo::for_viewer(
                     name,
                     &entry,
                     defaults.as_ref(),
-                    id.has_role("admin"),
+                    entry_viewer(id),
                 ) else {
                     continue;
                 };
@@ -3709,11 +3720,12 @@ pub async fn ab_search_index(
             .filter(|s| !s.is_empty());
         for name in &names {
             if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
+                // Only the protocols the caller may use; none hides the entry.
                 let Some(info) = crate::vault::EntryInfo::for_viewer(
                     name,
                     &entry,
                     defaults.as_ref(),
-                    id.has_role("admin"),
+                    entry_viewer(id),
                 ) else {
                     continue;
                 };
@@ -3772,11 +3784,12 @@ pub async fn ab_list_entries(
     let mut entries = Vec::new();
     for name in &entry_names {
         if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
+            // Only the protocols the caller may use; none hides the entry.
             let Some(info) = crate::vault::EntryInfo::for_viewer(
                 name,
                 &entry,
                 defaults.as_ref(),
-                id.has_role("admin"),
+                entry_viewer(id),
             ) else {
                 continue;
             };
@@ -3816,7 +3829,7 @@ pub struct ConnectRequest {
     #[serde(default)]
     pub domain: Option<String>,
     /// Which of the entry's protocols to connect with, by name (#296).
-    /// Default: the primary.
+    /// Default: the primary, or the first one the caller may use.
     #[serde(default)]
     pub protocol: Option<String>,
 }
@@ -4189,7 +4202,11 @@ pub async fn ab_connect_entry(
     };
 
     // The protocol to connect with, resolved to a plain single-type entry.
-    let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(req.protocol.as_deref()) else {
+    // One the caller may not use is reported as missing, like one that does
+    // not exist, so it does not show.
+    let Some((protocol_name, ab_entry)) =
+        ab_entry.pick_protocol(req.protocol.as_deref(), entry_viewer(&id))
+    else {
         let msg = if req
             .protocol
             .as_deref()
@@ -4883,12 +4900,50 @@ pub async fn ab_delete_folder(
 }
 
 /// Check an entry body from the API and tidy it for storage: either form
-/// (a top-level `type`, or `protocols`), written in the old flat form when
-/// that loses nothing.
+/// (a top-level `type`, or `protocols`), access rules tidied like a
+/// folder's, written in the old flat form when that loses nothing.
 fn prepare_entry_body(mut e: AddressBookEntry) -> Result<AddressBookEntry, String> {
     e.check_shape().map_err(|e| e.to_string())?;
+    fn tidy(
+        groups: &mut Option<Vec<String>>,
+        users: &mut Option<Vec<String>>,
+    ) -> Result<(), String> {
+        if let Some(g) = groups.as_mut() {
+            let mut out: Vec<String> = Vec::new();
+            for x in g.drain(..) {
+                let x = x.trim().to_string();
+                if !x.is_empty() && !out.contains(&x) {
+                    out.push(x);
+                }
+            }
+            *g = out;
+        }
+        if let Some(u) = users.take() {
+            *users = Some(normalize_allowed_users(u)?);
+        }
+        Ok(())
+    }
+    tidy(&mut e.allowed_groups, &mut e.allowed_users)?;
+    // An empty host rule means no rule: store it as absent.
+    if e.allowed_groups.as_ref().is_some_and(Vec::is_empty)
+        && e.allowed_users.as_ref().is_none_or(Vec::is_empty)
+    {
+        e.allowed_groups = None;
+    }
+    if e.allowed_users.as_ref().is_some_and(Vec::is_empty) && e.allowed_groups.is_none() {
+        e.allowed_users = None;
+    }
+    // A flat body with an access rule goes to the list form, which older
+    // instances cannot read: in the flat form they would read the entry and
+    // ignore the rule, showing it to the whole folder.
+    if !e.has_protocol_list() && (e.allowed_groups.is_some() || e.allowed_users.is_some()) {
+        let (mut host, protocols) = e.split();
+        host.protocols = Some(protocols);
+        e = host;
+    }
     if let Some(protocols) = e.protocols.as_mut() {
         for p in protocols.iter_mut() {
+            tidy(&mut p.allowed_groups, &mut p.allowed_users)?;
             if p.name.as_deref() == Some(p.session_type.as_str()) {
                 p.name = None;
             }
@@ -6867,9 +6922,9 @@ impl FolderSource for VaultFolderSource<'_> {
             .unwrap_or_default();
         for entry_name in &entries {
             if let Ok(entry) = self.vault.get_entry(scope, path, entry_name).await {
-                // Every protocol (#296), each resolved against the host it
-                // inherits from.
-                for (_, eff) in entry.visible_protocols() {
+                // Every protocol the caller may use (#296), each resolved
+                // against the host it inherits from.
+                for (_, eff) in entry.visible_protocols(entry_viewer(self.id)) {
                     for var in crate::vault::entry_credential_variables(&eff) {
                         if !out.contains(&var) {
                             out.push(var);
@@ -7373,7 +7428,8 @@ pub async fn quick_connect(
         // name (or type); without it the primary is used, as links made
         // before multi-protocol entries expect.
         let requested = query.protocol.as_deref().filter(|p| !p.trim().is_empty());
-        let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(requested) else {
+        let Some((protocol_name, ab_entry)) = ab_entry.pick_protocol(requested, entry_viewer(&id))
+        else {
             return quick_connect_error(
                 StatusCode::NOT_FOUND,
                 &match requested {
@@ -10200,7 +10256,7 @@ mod tests {
         // The body has no username or jump hosts, so, as before, they go.
         assert_eq!(stored.username, None);
         // And it connects as the flat entry always did.
-        let (name, eff) = stored.pick_protocol(None).unwrap();
+        let (name, eff) = stored.pick_protocol(None, None).unwrap();
         assert_eq!(name, "ssh");
         assert_eq!(
             serde_json::to_value(&eff).unwrap(),
@@ -10256,7 +10312,7 @@ mod tests {
         })))
         .unwrap();
         assert_eq!(e.protocol_types(), ["rdp", "ssh", "web"]);
-        let (_, ssh) = e.pick_protocol(Some("ssh")).unwrap();
+        let (_, ssh) = e.pick_protocol(Some("ssh"), None).unwrap();
         assert_eq!((ssh.port, ssh.prompt_credentials), (Some(2222), Some(true)));
     }
 
@@ -10361,31 +10417,89 @@ mod tests {
         .unwrap();
         assert!(e.protocols.is_none());
         assert_eq!(e.session_type, "ssh");
+        // With an access rule it cannot be: an older instance would ignore it.
+        let e = super::prepare_entry_body(entry(json!({
+            "hostname": "h", "allowed_groups": [" ops ", "ops", ""],
+            "protocols": [{"type": "ssh"}]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some());
+        assert_eq!(e.allowed_groups.as_deref(), Some(&["ops".to_string()][..]));
+        // So must a flat body with one, as the NetBox webhook or a script
+        // would send it: an older instance reading the flat form would
+        // ignore the rule.
+        let e = super::prepare_entry_body(entry(json!({
+            "type": "ssh", "hostname": "h", "port": 22, "password": "pw",
+            "allowed_users": ["alice@example.com"]
+        })))
+        .unwrap();
+        assert!(e.protocols.is_some(), "stored in the list form");
+        assert!(e.session_type.is_empty());
+        assert_eq!(
+            e.allowed_users.as_deref(),
+            Some(&["alice@example.com".to_string()][..])
+        );
+        let (name, eff) = e.pick_protocol(None, None).unwrap();
+        assert_eq!((name.as_str(), eff.port), ("ssh", Some(22)));
+        assert_eq!(eff.password.as_deref(), Some("pw"));
+        // Without a rule, a flat body stays flat.
+        let e = super::prepare_entry_body(entry(json!({"type": "ssh", "hostname": "h"}))).unwrap();
+        assert!(e.protocols.is_none());
         assert!(super::prepare_entry_body(entry(json!({"hostname": "h"}))).is_err());
+        assert!(super::prepare_entry_body(entry(json!({
+            "protocols": [{"type": "ssh", "allowed_users": ["has space@x"]}]
+        })))
+        .is_err());
     }
 
     #[test]
-    fn listing_shows_every_protocol_and_no_secrets() {
+    fn listing_shows_only_the_protocols_a_user_may_use_and_no_secrets() {
         let e = entry(json!({
             "hostname": "10.0.0.10", "username": "Administrator", "password": "host-pw",
+            "allowed_groups": ["ops"],
             "protocols": [
                 {"type": "rdp", "password": "rdp-pw"},
-                {"type": "ssh", "username": "admin"}
+                {"type": "ssh", "username": "admin", "allowed_groups": ["netops"]}
             ]
         }));
-        let info = crate::vault::EntryInfo::for_viewer("srv", &e, None, false).unwrap();
+        let ops = vec!["ops".to_string()];
+        let netops = vec!["netops".to_string()];
+        let none: Vec<String> = vec![];
+        let as_user = |groups: &[String]| {
+            crate::vault::EntryInfo::for_viewer(
+                "srv",
+                &e,
+                None,
+                Some(crate::vault::FolderSubject {
+                    email: Some("u@example.com"),
+                    groups,
+                }),
+            )
+        };
+        let info = as_user(&ops).unwrap();
         assert_eq!(info.session_type, "rdp");
         assert_eq!(info.protocol.as_deref(), Some("rdp"));
-        assert_eq!(info.protocols.len(), 2);
-        assert_eq!(info.protocols[1].username.as_deref(), Some("admin"));
+        assert_eq!(info.protocols.len(), 1);
         let text = serde_json::to_string(&info).unwrap();
         assert!(!text.contains("pw"), "{text}");
-        assert!(!text.contains("settings"), "settings are for admins");
-        // An admin also gets each level's own fields, secrets as flags.
-        let admin = crate::vault::EntryInfo::for_viewer("srv", &e, None, true).unwrap();
+        assert!(!text.contains("allowed_groups"), "rules are for admins");
+        assert!(!text.contains("settings"));
+        // netops reaches only SSH, so that is what the entry shows as.
+        let info = as_user(&netops).unwrap();
+        assert_eq!(info.session_type, "ssh");
+        assert_eq!(info.username.as_deref(), Some("admin"));
+        assert_eq!(info.protocols.len(), 1);
+        assert!(as_user(&none).is_none(), "no protocol: no entry");
+        // An admin sees both, the rules, and each level's own fields.
+        let admin = crate::vault::EntryInfo::for_viewer("srv", &e, None, None).unwrap();
         assert_eq!(admin.protocols.len(), 2);
         let text = serde_json::to_string(&admin).unwrap();
         assert!(!text.contains("pw\""), "{text}");
+        assert_eq!(admin.allowed_groups.as_deref(), Some(&ops[..]));
+        assert_eq!(
+            admin.protocols[1].allowed_groups.as_deref(),
+            Some(&netops[..])
+        );
         assert_eq!(
             admin.settings.as_ref().unwrap()["has_password"],
             json!(true)
@@ -10400,8 +10514,12 @@ mod tests {
     fn a_flat_entry_lists_as_before_plus_its_one_protocol() {
         let e = fw01_stored();
         let before = serde_json::to_value(crate::vault::EntryInfo::from(("fw01", &e))).unwrap();
+        let who = crate::vault::FolderSubject {
+            email: Some("u@example.com"),
+            groups: &[],
+        };
         let now = serde_json::to_value(
-            crate::vault::EntryInfo::for_viewer("fw01", &e, None, false).unwrap(),
+            crate::vault::EntryInfo::for_viewer("fw01", &e, None, Some(who)).unwrap(),
         )
         .unwrap();
         for (k, v) in before.as_object().unwrap() {
