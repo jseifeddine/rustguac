@@ -206,6 +206,12 @@ since the folder doesn't exist but the route matches). A broken proxy
 returns **404** from axum's router (because the URL got decoded to extra
 path segments along the way).
 
+## WebSocket timeouts
+
+Session streams are long-lived WebSockets, so the proxy's tunnel or read timeout must be long: the examples above use 8h to match `session_max_duration_secs`. A shorter one cuts off a session that is merely idle.
+
+Ending sessions whose browser has gone away is rustguac's job, not the proxy's. rustguac pings a quiet browser and ends the session once it has heard nothing for 60 seconds (see [When a browser goes away](configuration.md#when-a-browser-goes-away)). All the proxies above pass WebSocket ping and pong frames through untouched once the connection is upgraded, so nothing needs configuring for this. A proxy that answered pings itself, instead of forwarding them, would make a vanished browser look present, and its session would stay open until the proxy's own timeout.
+
 ## Trusting the proxy's IP
 
 Whichever proxy you use, set `trusted_proxies` in `config.toml` to match

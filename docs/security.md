@@ -225,6 +225,7 @@ Additionally, user API token operations are logged to a persistent `token_audit_
 
 - **Pending timeout** — sessions that don't receive a WebSocket connection within 60 seconds (configurable) are automatically cleaned up
 - **Maximum duration** — active sessions are terminated after 8 hours (configurable) to prevent abandoned sessions
+- **Vanished browsers** — a browser connection that has sent nothing for 60 seconds, not even an answer to a WebSocket ping, is closed. A browser that went away without closing its connection (sleep, a network change) therefore does not leave its session running. See [When a browser goes away](configuration.md#when-a-browser-goes-away)
 - **Session ownership** — non-admin users can only terminate their own sessions. Only the user who created a session can make its first (owner) connection; admins cannot claim another user's pending session, and watch live sessions through shadow tokens instead
 - **Share tokens** — each shareable session has two share URLs, one view-only and one with keyboard and mouse control, valid until the session ends. View-only is enforced by guacd, which ignores input from a view-only participant
 

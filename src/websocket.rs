@@ -443,10 +443,17 @@ async fn proxy_ws_guacd(
             async move { guacd_to_ws(guacd_read, ws_sink_g, recording_clone, sd_flag).await },
         );
 
-    // browser → guacd
+    // browser → guacd, alongside the watch on the browser (see
+    // `watch_browser`): whichever ends first ends this side.
+    let guacd_write = Arc::new(tokio::sync::Mutex::new(guacd_write));
+    let heard = Arc::new(Heard::new());
     let ws_sink_b = ws_sink.clone();
-    let browser_to_guacd =
-        tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write, ws_sink_b).await });
+    let browser_to_guacd = tokio::spawn(async move {
+        tokio::select! {
+            r = ws_to_guacd(ws_read, guacd_write.clone(), ws_sink_b.clone(), heard.clone()) => r,
+            r = watch_browser(heard, guacd_write, ws_sink_b) => r,
+        }
+    });
 
     // Wait for either direction to finish, or cancellation, then stop both.
     let result = match race_and_abort(guacd_to_browser, browser_to_guacd, &cancel).await {
@@ -501,6 +508,118 @@ fn task_error<E: std::fmt::Display>(
 }
 
 type WsSink = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
+type GuacdWriter = Arc<tokio::sync::Mutex<tokio::io::WriteHalf<GuacdStream>>>;
+
+/// With nothing at all from the browser for this long (no instruction, no
+/// tunnel ping, no answer to a WebSocket ping), it is taken to be gone and
+/// the proxy ends. A browser that vanishes without closing its WebSocket (a
+/// laptop asleep, a network change) otherwise left its session Active, and
+/// counting against the per-user limit, until the TCP connection errored
+/// out, or for good while a send to it was stuck behind a full buffer.
+const BROWSER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// The browser is pinged once it has been quiet this long. A page in the
+/// foreground sends a tunnel ping every 500ms, so this is mostly for pages
+/// in background tabs (timers slowed), frozen (Safari) or gone. The
+/// browser's network stack answers, whatever its page is doing.
+const PING_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+/// guacd ends a user it hears nothing from for 15 seconds ("User is not
+/// responding"). The Guacamole client sends a `nop` every 5 seconds to
+/// prevent that, but not while its page is frozen, so the proxy sends one
+/// for it when nothing has gone to guacd for this long.
+const NOP_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+const WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// When the browser was last heard from, and when guacd last was sent
+/// anything, as milliseconds since the proxy started.
+struct Heard {
+    start: tokio::time::Instant,
+    browser: std::sync::atomic::AtomicU64,
+    guacd: std::sync::atomic::AtomicU64,
+}
+
+impl Heard {
+    fn new() -> Self {
+        Heard {
+            start: tokio::time::Instant::now(),
+            browser: 0.into(),
+            guacd: 0.into(),
+        }
+    }
+    fn now(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+    fn browser_now(&self) {
+        self.browser
+            .store(self.now(), std::sync::atomic::Ordering::Relaxed);
+    }
+    fn guacd_now(&self) {
+        self.guacd
+            .store(self.now(), std::sync::atomic::Ordering::Relaxed);
+    }
+    fn since(&self, at: &std::sync::atomic::AtomicU64) -> std::time::Duration {
+        let at = at.load(std::sync::atomic::Ordering::Relaxed);
+        std::time::Duration::from_millis(self.now().saturating_sub(at))
+    }
+}
+
+/// What the watch on the browser does on one tick.
+#[derive(Debug, PartialEq)]
+struct WatchStep {
+    end: bool,
+    ping: bool,
+    nop: bool,
+}
+
+fn watch_step(browser_quiet: std::time::Duration, guacd_quiet: std::time::Duration) -> WatchStep {
+    let end = browser_quiet >= BROWSER_TIMEOUT;
+    WatchStep {
+        end,
+        ping: !end && browser_quiet >= PING_AFTER,
+        nop: !end && guacd_quiet >= NOP_AFTER,
+    }
+}
+
+/// Watch the browser end of the proxy. Returns (ending the proxy) once the
+/// browser has been silent for `BROWSER_TIMEOUT`; until then pings it when
+/// it goes quiet, and keeps guacd from timing the user out while its page
+/// is frozen. Pings are skipped while a send to the browser holds the sink:
+/// a browser that stops reading then stops being heard from, and is ended.
+async fn watch_browser<W, S>(
+    heard: Arc<Heard>,
+    guacd: Arc<tokio::sync::Mutex<W>>,
+    ws_sink: Arc<tokio::sync::Mutex<S>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let mut tick = tokio::time::interval(WATCH_TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let step = watch_step(heard.since(&heard.browser), heard.since(&heard.guacd));
+        if step.end {
+            return Err(format!(
+                "nothing from the browser for {}s",
+                heard.since(&heard.browser).as_secs()
+            )
+            .into());
+        }
+        if step.nop {
+            guacd.lock().await.write_all(b"3.nop;").await?;
+            heard.guacd_now();
+        }
+        if step.ping {
+            if let Ok(mut sink) = ws_sink.try_lock() {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    sink.send(Message::Ping(Default::default())),
+                )
+                .await;
+            }
+        }
+    }
+}
 
 /// Maximum bytes the guacd-side carry buffer is allowed to grow to before
 /// force-flushing without a clean instruction boundary. In practice guacd
@@ -593,11 +712,13 @@ async fn guacd_to_ws(
 /// it after 15s. We mirror Apache's filter behaviour.
 async fn ws_to_guacd(
     mut ws_read: futures_util::stream::SplitStream<WebSocket>,
-    mut guacd: tokio::io::WriteHalf<GuacdStream>,
+    guacd: GuacdWriter,
     ws_sink: WsSink,
+    heard: Arc<Heard>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     while let Some(msg) = ws_read.next().await {
         let msg = msg?;
+        heard.browser_now();
         match msg {
             Message::Text(text) => {
                 // Empty-opcode instructions always start with "0.," — fast
@@ -621,7 +742,8 @@ async fn ws_to_guacd(
                 if text.contains(".clipboard,") {
                     tracing::info!("browser sent clipboard instruction to guacd");
                 }
-                guacd.write_all(text.as_bytes()).await?;
+                guacd.lock().await.write_all(text.as_bytes()).await?;
+                heard.guacd_now();
             }
             Message::Binary(_) => {
                 continue;
@@ -739,6 +861,116 @@ mod tests {
         let r = race_and_abort(forever(other.clone()), ended, &cancel).await;
         assert!(matches!(r, Race::Second(Ok(Ok(())))));
         assert!(gone(&other).await, "the still-running side was stopped");
+    }
+
+    #[test]
+    fn the_watch_pings_a_quiet_browser_and_ends_a_silent_one() {
+        let s = std::time::Duration::from_secs;
+        let step = |b, g, end, ping, nop| {
+            assert_eq!(
+                watch_step(s(b), s(g)),
+                WatchStep { end, ping, nop },
+                "browser quiet {b}s, guacd quiet {g}s"
+            );
+        };
+        step(0, 0, false, false, false);
+        step(4, 4, false, false, false);
+        step(5, 5, false, false, true);
+        step(10, 1, false, true, false);
+        step(59, 59, false, true, true);
+        step(60, 0, true, false, false);
+        step(600, 600, true, false, false);
+    }
+
+    /// Runs the watch for at most `limit` of (paused) time while `feed`
+    /// plays the browser. Returns whether the watch ended the proxy, and
+    /// the `nop`s it sent guacd.
+    async fn watch_for(
+        limit: std::time::Duration,
+        feed: impl Fn(&Heard) + Send + 'static,
+        every: std::time::Duration,
+    ) -> (bool, usize) {
+        use tokio::io::AsyncReadExt as _;
+        let (guacd_w, mut guacd_r) = tokio::io::duplex(1 << 16);
+        let heard = Arc::new(Heard::new());
+        let feeder = {
+            let heard = heard.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(every).await;
+                    feed(&heard);
+                }
+            })
+        };
+        let ended = tokio::time::timeout(
+            limit,
+            watch_browser(
+                heard,
+                Arc::new(tokio::sync::Mutex::new(guacd_w)),
+                Arc::new(tokio::sync::Mutex::new(futures_util::sink::drain())),
+            ),
+        )
+        .await
+        .is_ok();
+        feeder.abort();
+        let mut sent = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Some(Ok(n)) = futures_util::FutureExt::now_or_never(guacd_r.read(&mut buf)) {
+            if n == 0 {
+                break;
+            }
+            sent.extend_from_slice(&buf[..n]);
+        }
+        let sent = String::from_utf8(sent).unwrap();
+        assert_eq!(sent.replace("3.nop;", ""), "", "only nops go to guacd");
+        (ended, sent.matches("3.nop;").count())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_browser_that_went_away_is_ended_within_a_minute() {
+        // Nothing from it at all (asleep, network gone): before, the session
+        // stayed Active until TCP gave up, half an hour or more.
+        let start = tokio::time::Instant::now();
+        let (ended, _) = watch_for(
+            std::time::Duration::from_secs(600),
+            |_| {},
+            std::time::Duration::from_secs(3600),
+        )
+        .await;
+        assert!(ended);
+        let took = start.elapsed().as_secs();
+        assert!((60..=62).contains(&took), "ended after {took}s");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_running_page_is_left_alone() {
+        // Its tunnel pings and its own nops: no pings or nops from the proxy.
+        let (ended, nops) = watch_for(
+            std::time::Duration::from_secs(600),
+            |h| {
+                h.browser_now();
+                h.guacd_now();
+            },
+            std::time::Duration::from_millis(500),
+        )
+        .await;
+        assert!(!ended);
+        assert_eq!(nops, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_frozen_page_is_kept_attached() {
+        // A background tab in Safari: the page sends nothing, but its network
+        // stack answers pings. guacd, which ends a user silent for 15s, is
+        // sent a nop every 5s for it.
+        let (ended, nops) = watch_for(
+            std::time::Duration::from_secs(600),
+            |h| h.browser_now(),
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert!(!ended);
+        assert!((110..=121).contains(&nops), "{nops} nops in 600s");
     }
 
     fn user(email: &str, role: &str) -> AuthIdentity {

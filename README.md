@@ -97,7 +97,7 @@ guacd (C, from guacamole-server)
 
 The client runs in any modern browser (Chrome, Firefox, Edge, Safari, Chromium, Brave). One caveat applies only to **H.264-accelerated RDP**, which is opt-in per connection (the per-entry H.264 toggle, off by default):
 
-- **Standard connections** (SSH, RDP, VNC, web sessions, VDI) work in every modern browser.
+- **Standard connections** (SSH, RDP, VNC, web sessions, VDI) work in every modern browser. Sessions in a background or minimised tab stay attached, including in Safari, which freezes such tabs (see [When a browser goes away](docs/configuration.md#when-a-browser-goes-away)).
 - **H.264-accelerated connections** need a browser that can decode H.264 through the WebCodecs API. **Chrome** and **Firefox** work. Open-source **Chromium** and **Brave** builds without the bundled H.264 codec, and older Safari, render a blank display on those connections. Leave H.264 off (the default) for universal browser support, or use Chrome or Firefox where it is enabled.
 
 ## Quick start

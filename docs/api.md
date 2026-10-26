@@ -374,6 +374,10 @@ Creating a session (`POST /api/sessions`) only opens the connection to the targe
 
 If the owner connection is not authenticated, or is authenticated as someone other than the creator, rustguac rejects the WebSocket with `403`, no browser attaches, and guacd eventually reports `User is not responding` (its timeout for a session whose client never arrived, roughly 15 seconds after creation). If you see `User is not responding`, the browser did not connect as the session's authenticated owner. A backend that creates sessions with an API key for a user who then connects with their own login must set `owner` (see [Creating a session for someone else](#creating-a-session-for-someone-else)).
 
+### Keeping the connection alive
+
+rustguac sends a WebSocket ping to a client that has been quiet for 10 seconds, and closes the connection once a client has sent nothing for 60 seconds, ping answers included. Closing the connection ends the session, as a normal disconnect does, unless another viewer is still connected. Browsers and standard WebSocket libraries answer pings automatically. A custom client must not turn that off, or must send something at least every minute. The Guacamole JavaScript client sends a `nop` every 5 seconds anyway. While the client is still answering pings but sends guacd nothing (a browser tab frozen in the background), rustguac sends guacd a `nop` itself, so guacd's 15-second `User is not responding` timeout does not end the session. See [When a browser goes away](configuration.md#when-a-browser-goes-away).
+
 ### Authenticating the owner connection
 
 The built-in client (`client_url`) authenticates the owner WebSocket one of three ways:

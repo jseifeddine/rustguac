@@ -27,6 +27,22 @@ See `config.example.toml` for a fully commented reference.
 | `session_max_duration_secs` | `28800` (8h) | Maximum active session duration |
 | `auth_session_ttl_secs` | `86400` (24h) | OIDC auth session cookie TTL |
 
+## Session limits
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `max_sessions` | `500` | Maximum sessions the server holds at once, all types and users. `0` for unlimited. Finished sessions still kept for `session_cleanup_delay_secs` currently count too ([#332](https://github.com/sol1/rustguac/issues/332)). Past it, creating a session fails with `maximum concurrent sessions reached (N)` |
+| `max_sessions_per_user` | `50` | Maximum pending and active sessions one user may have at once. `0` for unlimited. Past it, creating a session fails with `maximum sessions per user reached (N)` |
+| `session_cleanup_delay_secs` | `300` (5 min) | How long a finished session is kept in memory (for the sessions list) before it is dropped. Session history in the database is not affected |
+
+### When a browser goes away
+
+A session ends when its browser closes the connection, when guacd or the target ends it, when it is terminated, or at `session_max_duration_secs`. A browser can also vanish without closing anything: a laptop goes to sleep, the network changes, or the browser freezes a background tab. rustguac watches every connection for this, with fixed timings that are not configurable:
+
+- **A browser silent for 60 seconds is taken to be gone**, and its connection is closed, exactly as if the browser had closed it. "Silent" means nothing at all arrived from it: no input, none of the client's keepalives, no answer to a WebSocket ping. The session ends with it unless someone else is still connected to it (a share link), and its slot under `max_sessions_per_user` is freed. A VDI container is kept for its idle timeout, as after any disconnect. Before this, such a session stayed active, and kept its slot, until the operating system gave up on the TCP connection, which can take half an hour or more.
+- **A browser quiet for 10 seconds is sent a WebSocket ping.** An open page in the foreground sends something every half second, so pings mostly go to pages in background tabs (whose timers browsers slow down), frozen pages and vanished ones. The browser's network stack answers pings even for a frozen page.
+- **guacd is kept from dropping a frozen page.** guacd ends a user it hears nothing from for 15 seconds ("User is not responding"). The client normally prevents that with a no-op every 5 seconds. Safari stops it by freezing background and minimised tabs. While the browser still counts as present (the first point above), rustguac sends guacd that no-op itself whenever nothing has reached guacd for 5 seconds. A session in a background Safari tab stays attached and carries on where it was when the tab is shown again.
+
 ## Browser session settings
 
 | Key | Default | Description |
